@@ -1,0 +1,194 @@
+# SoundAgent — Technical Architecture
+
+Living reference. Updated as each phase is implemented. Documents what is **actually built**, not the plan.
+
+---
+
+## Module map
+
+```
+soundagent/
+├── __main__.py        CLI entrypoint — argument parsing, config load, dispatch
+├── config.py          Config dataclasses + YAML/env loader
+├── logging_setup.py   Rotating file + console logging setup
+├── init_library.py    Library folder hierarchy creator
+├── ffprobe.py         ffprobe subprocess wrapper → AudioMetadata
+├── tick.py            Tick runner — orchestrates the pipeline per phase
+└── adapters/          Source adapter implementations (P2)
+```
+
+---
+
+## Config system
+
+**File:** `soundagent/config.py`
+
+Two-layer: YAML file is loaded first, then env vars overwrite specific keys.
+
+```
+config.yaml  →  load_config()  →  Config dataclass
+                    ↑
+              env var overrides applied before dataclass construction
+```
+
+**Env vars recognised:**
+
+| Variable | Overrides |
+|---|---|
+| `SOUNDAGENT_LIBRARY_ROOT` | `library_root` |
+| `SOUNDAGENT_BASEHEAD_IMPORT_PATH` | `basehead_import_path` |
+| `ANTHROPIC_API_KEY` | `Config.anthropic_api_key` (also read by Anthropic SDK automatically) |
+| `SOUNDAGENT_WEBDAV_PASSWORD` | read by WebDAV adapter (P2) — not yet in config loader |
+
+**Data structures:**
+
+```python
+@dataclass
+class SourceConfig:
+    name: str
+    type: str        # local | network | rclone | webdav
+    enabled: bool
+    options: dict    # all remaining YAML keys for that source (path, port, remote, etc.)
+
+@dataclass
+class Config:
+    library_root: Path
+    basehead_import_path: Path
+    tick_interval: int           # seconds — Cowork uses this to schedule next tick
+    log_level: str
+    sources: list[SourceConfig]
+    anthropic_api_key: str
+    raw: dict                    # full parsed YAML, unmodified
+```
+
+`SourceConfig.options` holds all type-specific fields verbatim from YAML (e.g. `path` for local/network, `remote`/`remote_path`/`mode`/`interval` for rclone, `port`/`auth`/`username` for webdav). The adapter (P2) reads from `options` directly.
+
+---
+
+## CLI
+
+**File:** `soundagent/__main__.py`  
+**Invocation:** `python -m soundagent [--config PATH] <command>`
+
+| Command | Flag | Effect |
+|---|---|---|
+| `init` | | Creates library folder hierarchy |
+| `tick` | `--dry-run` | Runs one agent tick; exits 0 (clean) or 1 (partial failure) |
+| `query` | `--tag` `--category` | Not yet implemented (P6) |
+
+Config is loaded and logging is set up before dispatch to any command. Config errors exit with code 2.
+
+---
+
+## Logging
+
+**File:** `soundagent/logging_setup.py`
+
+Always attaches a console `StreamHandler`. Attaches a `RotatingFileHandler` (5 MB × 5 files → `<library_root>/soundagent.log`) **only if `library_root` already exists** — this avoids a crash when `init` hasn't been run yet. Logger names follow the `soundagent.<module>` hierarchy (e.g. `soundagent.tick`, `soundagent.init`).
+
+---
+
+## Library folder hierarchy
+
+**File:** `soundagent/init_library.py`
+
+`init_library(cfg)` creates all dirs in `SUBDIRS` under `cfg.library_root` using `mkdir(parents=True, exist_ok=True)` — idempotent. With `dry_run=True` it logs intended paths and touches nothing.
+
+```
+<library_root>/
+├── _inbox/            all adapters deliver here
+├── _staging/          atomic copy target during processing
+├── _errors/           quarantined files (bad format, hash failure) with source annotation
+├── unclassified/      low-confidence enrichment fallback (P3)
+├── archive/
+├── field/{nature,urban,industrial,interior}/
+├── sfx/{impacts,ambience,foley,designed}/
+├── music/{loops,stems,beds,stingers}/
+├── broadcast/{idents,vo,transitions}/
+├── soundagent.log     rotating log (created after first tick)
+└── summary.json       last tick's structured report
+```
+
+`basehead_import_path` is configured separately — it's where the agent delivers finished files for Basehead to watch. It is not created by `init_library`; it must already exist or be configured in Basehead.
+
+---
+
+## ffprobe wrapper
+
+**File:** `soundagent/ffprobe.py`
+
+Calls `ffprobe -v quiet -print_format json -show_streams -show_format <path>` via `subprocess.run`. Picks the first stream with `codec_type == "audio"`.
+
+```python
+@dataclass
+class AudioMetadata:
+    duration_s: float
+    sample_rate: int
+    bit_depth: int | None    # None if ffprobe doesn't report it (e.g. MP3)
+    channels: int
+    format: str              # ffprobe format_name (e.g. "wav", "mp3", "aiff")
+    codec: str               # codec_name (e.g. "pcm_s24le", "mp3")
+    file_size: int           # bytes
+```
+
+`bit_depth` checks both `bits_per_sample` and `bits_per_raw_sample` — ffprobe reports these inconsistently across formats. Raises `RuntimeError` if ffprobe is missing from PATH; raises `ValueError` if no audio stream is found.
+
+---
+
+## Tick runner
+
+**File:** `soundagent/tick.py`
+
+`run_tick(cfg, dry_run) -> int` returns exit code 0 or 1. On completion (not dry-run, library exists) it writes `<library_root>/summary.json`:
+
+```json
+{
+  "duration_s": 0.01,
+  "dry_run": false,
+  "sources": ["local-inbox"],
+  "errors": []
+}
+```
+
+**Pipeline steps and implementation status:**
+
+| Step | Description | Status |
+|---|---|---|
+| Health check | Check each enabled source adapter | P2 |
+| Scan | Adapters deliver files to `_inbox/` | P2 |
+| Dedup | SHA-256 → SQLite → skip known | P6 |
+| Validate | Extension/format allowlist → `_errors/` | P2 |
+| Stage | Atomic copy to `_staging/` + ffprobe | P2 |
+| Enrich | Claude API → structured JSON | P3 |
+| Embed | iXML/BWF · ID3 · XMP sidecar | P4 |
+| Route | Rules engine → target path | P5 |
+| Deliver | Atomic move → basehead_import_path | P5 |
+| Catalogue | SQLite upsert + FTS5 index | P6 |
+| Report | summary.json + log | **Done (P1)** |
+
+---
+
+## Planned modules (not yet built)
+
+| Module | Phase | Purpose |
+|---|---|---|
+| `soundagent/adapters/local.py` | P2 | watchdog-based local/network ingest |
+| `soundagent/adapters/rclone.py` | P2 | rclone sync or mount wrapper |
+| `soundagent/adapters/webdav.py` | P2 | wsgidav background server |
+| `soundagent/dedup.py` | P2/P6 | SHA-256 hasher + SQLite dedup check |
+| `soundagent/enrichment.py` | P3 | Claude API client, prompt, response parser |
+| `soundagent/embed.py` | P4 | bwfmetaedit / mutagen / XMP writer |
+| `soundagent/ucs.py` | P4 | Enrichment → UCS field mapper |
+| `soundagent/router.py` | P5 | Rules engine: category → library path |
+| `soundagent/catalogue.py` | P6 | SQLite schema, upsert, FTS5 queries |
+| `soundagent/api.py` | P8 | FastAPI search server |
+
+---
+
+## Key constraints to remember
+
+- **rclone mount on Windows** requires WinFsp (FUSE layer). Sync mode works without it.
+- **WebDAV server** must start and stop cleanly with the agent process — lifecycle tied to tick in Cowork context.
+- **Basehead iXML import fields** are undocumented. UCS field mapping (P4) must be validated empirically against a live Basehead instance before considering it done.
+- **Non-ASCII filenames** in iXML have known edge cases — test with multilingual content in P4.
+- **`_inbox/` is the only handoff point** between adapters and the rest of the pipeline. Adapters must not write anywhere else.
