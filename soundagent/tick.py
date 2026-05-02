@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from soundagent.config import Config
+from soundagent.ffprobe import AudioMetadata
 
 log = logging.getLogger("soundagent.tick")
 
@@ -15,6 +16,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     from soundagent.dedup import sha256
     from soundagent.ingest import is_allowed, stage_file
     from soundagent.ingest_log import IngestLog
+    from soundagent.enrichment import EnrichmentCache, enrich
 
     start = time.monotonic()
     mode = " (dry-run)" if dry_run else ""
@@ -23,11 +25,11 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     errors_dir = cfg.library_root / "_errors"
     staging_dir = cfg.library_root / "_staging"
     ingest_log = IngestLog(cfg.library_root / "ingest.log")
+    cache = EnrichmentCache(cfg.library_root / "enrichment_cache.json")
     errors: list[str] = []
-    staged: list[dict] = []
 
     # ── 1+2: adapter health check + scan ─────────────────────────────────────
-    raw_files: list[tuple[Path, str]] = []   # (inbox path, adapter name)
+    raw_files: list[tuple[Path, str]] = []
     active = [s for s in cfg.sources if s.enabled]
     for source in active:
         adapter = get_adapter(cfg, source)
@@ -41,12 +43,12 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
 
     if dry_run:
         log.info(f"[dry-run] {len(raw_files)} file(s) would be processed")
-        _write_summary(cfg, start, dry_run, staged, errors, active)
+        _write_summary(cfg, start, dry_run, [], errors, active)
         return 0
 
-    # ── 3: dedup (within-tick hash check; catalogue dedup in P6) ─────────────
-    seen_hashes: dict[str, str] = {}   # hash → filename
-    deduped: list[tuple[Path, str, str]] = []   # (path, hash, adapter)
+    # ── 3: dedup (within-tick; catalogue dedup in P6) ────────────────────────
+    seen_hashes: dict[str, str] = {}
+    deduped: list[tuple[Path, str, str]] = []
     for f, adapter_name in raw_files:
         h = sha256(f)
         if h in seen_hashes:
@@ -69,23 +71,13 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             errors.append(f.name)
 
     # ── 5: stage + ffprobe ───────────────────────────────────────────────────
+    staged: list[tuple[Path, str, str, AudioMetadata]] = []  # (path, hash, adapter, meta)
     for f, h, adapter_name in valid:
         try:
             staging_path = stage_file(f, staging_dir, hash_fragment=h)
             meta = ffprobe.extract(staging_path)
-            f.unlink(missing_ok=True)   # remove from inbox after successful stage
-            record = {
-                "path": str(staging_path),
-                "hash": h,
-                "source": adapter_name,
-                "duration_s": meta.duration_s,
-                "sample_rate": meta.sample_rate,
-                "bit_depth": meta.bit_depth,
-                "channels": meta.channels,
-                "format": meta.format,
-                "codec": meta.codec,
-            }
-            staged.append(record)
+            f.unlink(missing_ok=True)
+            staged.append((staging_path, h, adapter_name, meta))
             ingest_log.write(
                 f.name, h, adapter_name, "staged",
                 duration_s=meta.duration_s,
@@ -98,11 +90,43 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(f.name, h, adapter_name, "error", error=str(exc))
             errors.append(f.name)
 
-    # ── P3: enrich (not yet implemented) ─────────────────────────────────────
-    if staged:
-        log.info(f"{len(staged)} file(s) staged — enrichment not yet implemented (Phase 3)")
+    # ── 6: enrich ────────────────────────────────────────────────────────────
+    enriched: list[tuple[Path, str, str, AudioMetadata, object]] = []
+    unclassified_dir = cfg.library_root / "unclassified"
+    for staging_path, h, adapter_name, meta in staged:
+        try:
+            result = enrich(staging_path.name, h, meta, cfg, cache)
+            enriched.append((staging_path, h, adapter_name, meta, result))
+            ingest_log.write(
+                staging_path.name, h, adapter_name, "enriched",
+                category=result.category,
+                subcategory=result.subcategory,
+                confidence=result.confidence,
+                low_confidence=result.low_confidence,
+            )
+        except Exception as exc:
+            log.error(f"Enrichment failed for {staging_path.name}: {exc}")
+            ingest_log.write(staging_path.name, h, adapter_name, "enrich_error", error=str(exc))
+            errors.append(staging_path.name)
 
-    _write_summary(cfg, start, dry_run, staged, errors, active)
+    # ── P4: embed metadata (not yet implemented) ──────────────────────────────
+    if enriched:
+        log.info(f"{len(enriched)} file(s) enriched — metadata embedding not yet implemented (Phase 4)")
+
+    summary_records = [
+        {
+            "filename": p.name,
+            "hash": h,
+            "source": src,
+            "category": r.category,
+            "subcategory": r.subcategory,
+            "confidence": r.confidence,
+            "low_confidence": r.low_confidence,
+        }
+        for p, h, src, _, r in enriched
+    ]
+    _write_summary(cfg, start, dry_run, summary_records, errors, active)
+
     exit_code = 1 if errors else 0
     elapsed = time.monotonic() - start
     log.info(f"--- TICK END ({elapsed:.1f}s, exit={exit_code}) ---")
@@ -110,9 +134,9 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
 
 
 def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, errors: list, active: list) -> None:
-    import time as _time
+    import time as _t
     summary = {
-        "duration_s": round(_time.monotonic() - start, 2),
+        "duration_s": round(_t.monotonic() - start, 2),
         "dry_run": dry_run,
         "sources": [s.name for s in active],
         "staged": len(staged),

@@ -17,6 +17,7 @@ soundagent/
 ├── dedup.py           SHA-256 file hasher
 ├── ingest.py          Extension allowlist validator + atomic stage_file()
 ├── ingest_log.py      JSONL ingest event writer
+├── enrichment.py      Claude API client, prompt, response parser, JSON cache
 ├── webdav_server.py   wsgidav server start/stop/status via subprocess + PID file
 └── adapters/
     ├── __init__.py    get_adapter() factory
@@ -168,7 +169,7 @@ class AudioMetadata:
 | Dedup | SHA-256 within-tick; catalogue dedup in P6 | **Partial (P2)** |
 | Validate | Extension/format allowlist → `_errors/` | **Done (P2)** |
 | Stage | Atomic copy to `_staging/` + ffprobe | **Done (P2)** |
-| Enrich | Claude API → structured JSON | P3 |
+| Enrich | Claude API → structured JSON | **Done (P3)** |
 | Embed | iXML/BWF · ID3 · XMP sidecar | P4 |
 | Route | Rules engine → target path | P5 |
 | Deliver | Atomic move → basehead_import_path | P5 |
@@ -209,11 +210,45 @@ Events written to `<library_root>/ingest.log` (JSONL, one record per file):
 ```
 Status values: `staged` | `rejected` | `error`
 
+## Enrichment pipeline (P3)
+
+**File:** `soundagent/enrichment.py`
+
+`enrich(filename, file_hash, meta, cfg, cache) -> EnrichmentResult`
+
+Flow: cache lookup → Claude API call → JSON parse → validate → cache write.
+
+**Cache** (`EnrichmentCache`): JSON file at `<library_root>/enrichment_cache.json`, keyed by SHA-256. Loaded once per tick, written after each new result. P6 will migrate this into SQLite.
+
+**API call** (`_call_api`): Uses `claude-sonnet-4-6` with prompt caching on the system prompt (`cache_control: ephemeral`). Retries on `RateLimitError`, `APIConnectionError`, `InternalServerError` — exponential backoff, 5 attempts max (tenacity).
+
+**Response validation** (`_validate`): Enforces:
+- `category` ∈ `{field, sfx, music, broadcast}`
+- `subcategory` valid for that category (see `VALID_SUBCATEGORIES`)
+- All required fields present
+- `confidence` clamped to `[0.0, 1.0]`
+- `low_confidence = confidence < 0.70` — tick.py logs these for `/unclassified/` routing (P5)
+
+**EnrichmentResult fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `category` | str | field / sfx / music / broadcast |
+| `subcategory` | str | one of the valid subs for the category |
+| `description` | str | 1–2 sentence natural language description |
+| `tags` | list[str] | lowercased |
+| `mood` | str | free-form descriptor |
+| `energy` | str | low / medium / high |
+| `bpm` | float \| None | music only |
+| `key` | str \| None | music only |
+| `confidence` | float | 0.0–1.0 |
+| `low_confidence` | bool | True when confidence < 0.70 |
+
 ## Planned modules (not yet built)
 
 | Module | Phase | Purpose |
 |---|---|---|
-| `soundagent/enrichment.py` | P3 | Claude API client, prompt, response parser |
+| ~~`soundagent/enrichment.py`~~ | ~~P3~~ | Done |
 | `soundagent/embed.py` | P4 | bwfmetaedit / mutagen / XMP writer |
 | `soundagent/ucs.py` | P4 | Enrichment → UCS field mapper |
 | `soundagent/router.py` | P5 | Rules engine: category → library path |
