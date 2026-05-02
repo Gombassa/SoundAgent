@@ -1,3 +1,7 @@
+---
+description: Generate a ready-to-paste Cowork task prompt for the SoundAgent tick
+---
+
 Generate a ready-to-paste Cowork task prompt for the SoundAgent tick.
 
 Read cowork_task.md in the repo root and print the prompt block from it, then remind

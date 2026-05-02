@@ -1,3 +1,7 @@
+---
+description: Read project context and produce a structured session briefing
+---
+
 Review available project context and produce a structured session briefing.
 
 ## What to read

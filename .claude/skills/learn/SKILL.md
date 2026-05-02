@@ -1,3 +1,7 @@
+---
+description: Review the session for insights worth persisting to CLAUDE.md or memories
+---
+
 Review the current conversation for insights worth persisting to CLAUDE.md files or memories.
 
 ## What to look for

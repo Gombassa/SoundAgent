@@ -11,6 +11,9 @@ config.yaml
 summary.json
 soundlibrary.db
 
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+
 # ML model weights (never commit)
 models/**
 !models/.gitkeep
