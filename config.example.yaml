@@ -1,10 +1,8 @@
 # SoundAgent configuration
 # Copy this file to config.yaml and fill in your values.
 
-library_root: D:\SoundAgent
-basehead_import_path: D:\SoundAgent   # Basehead watches this whole folder tree;
-                                       # set to a different path if you want a
-                                       # separate Basehead hot-drop folder
+library_root: D:\Sound Library
+basehead_import_path: D:\Sound Library   # Basehead watches this whole folder tree
 
 tick_interval: 300        # seconds — used by Cowork to schedule the next tick
 log_level: INFO
@@ -37,7 +35,13 @@ audio_analysis:
 
 sources:
 
-  # ── Local / existing libraries ──────────────────────────────────────────────
+  # ── Main drop folder — files placed here are picked up each tick ─────────────
+  - name: inbox
+    type: local
+    path: D:\SoundLibrary_Inbox
+    enabled: true
+
+  # ── Existing local libraries ─────────────────────────────────────────────────
   - name: field-recordings-d
     type: local
     path: D:\Field Recordings

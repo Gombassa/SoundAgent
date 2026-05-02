@@ -142,15 +142,28 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(staging_path.name, h, adapter_name, "enrich_error", error=str(exc))
             errors.append(staging_path.name)
 
+    # ── 7a: rename ───────────────────────────────────────────────────────────
+    from soundagent.renamer import rename_staged_file
+
+    renamed: list[tuple] = []
+    for staging_path, h, adapter_name, meta, result, audio_result in enriched:
+        staging_path = rename_staged_file(
+            staged_path=staging_path,
+            suggested=result.suggested_filename,
+            meta=meta,
+            dry_run=dry_run,
+        )
+        renamed.append((staging_path, h, adapter_name, meta, result, audio_result))
+
     # ── 8: embed metadata ────────────────────────────────────────────────────
     from soundagent.ucs import map_to_ucs
     from soundagent.embed import embed
 
     embedded: list[tuple] = []
-    for staging_path, h, adapter_name, meta, result, audio_result in enriched:
+    for staging_path, h, adapter_name, meta, result, audio_result in renamed:
         try:
             ucs = map_to_ucs(result, staging_path.name)
-            embed(staging_path, ucs)
+            embed(staging_path, ucs, original_filename=result.original_filename or None)
             embedded.append((staging_path, h, adapter_name, meta, result, audio_result, ucs))
             ingest_log.write(
                 staging_path.name, h, adapter_name, "embedded",
@@ -205,6 +218,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 "usage_suggestions": result.usage_suggestions,
                 "notes": result.notes,
                 "language": result.language,
+                "original_filename": result.original_filename or None,
                 # audio analysis fields for catalogue
                 "yamnet_classes": audio_result.yamnet_classes,
                 "audioclip_matches": audio_result.audioclip_matches,
@@ -238,6 +252,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 bit_depth=rec.get("bit_depth"),
                 channels=rec.get("channels", 0),
                 file_size=rec.get("file_size", 0),
+                original_filename=rec.get("original_filename"),
             )
             catalogue.upsert_enrichment(
                 hash=rec["hash"],

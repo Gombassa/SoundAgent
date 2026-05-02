@@ -130,7 +130,7 @@ def test_embed_wav_dispatches_to_wav_handler():
         path.write_bytes(b"fake")
         with patch("soundagent.embed._embed_wav") as mock:
             embed(path, _ucs())
-            mock.assert_called_once_with(path, _ucs())
+            mock.assert_called_once_with(path, _ucs(), None)
 
 
 def test_embed_mp3_dispatches_to_mp3_handler():

@@ -160,7 +160,12 @@ def _now() -> str:
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """Add P7 columns to enrichment and rebuild FTS5 if needed."""
+    """Add new columns to files/enrichment and rebuild FTS5 if needed."""
+    existing_files = {row[1] for row in con.execute("PRAGMA table_info(files)").fetchall()}
+    if "original_filename" not in existing_files:
+        con.execute("ALTER TABLE files ADD COLUMN original_filename TEXT")
+        log.debug("Migration: added files.original_filename")
+
     existing = {row[1] for row in con.execute("PRAGMA table_info(enrichment)").fetchall()}
     for col_name, col_type in _NEW_ENRICHMENT_COLUMNS:
         if col_name not in existing:
@@ -243,6 +248,7 @@ class Catalogue:
         channels: int = 0,
         file_size: int = 0,
         basehead_delivered: bool = False,
+        original_filename: Optional[str] = None,
     ) -> None:
         now = _now()
         self._con.execute(
@@ -250,16 +256,17 @@ class Catalogue:
             INSERT INTO files
               (hash, filename, source_adapter, library_path, format, codec,
                duration_s, sample_rate, bit_depth, channels, file_size,
-               date_added, last_seen, basehead_delivered)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               date_added, last_seen, basehead_delivered, original_filename)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(hash) DO UPDATE SET
               last_seen          = excluded.last_seen,
               library_path       = COALESCE(excluded.library_path, library_path),
-              basehead_delivered = excluded.basehead_delivered
+              basehead_delivered = excluded.basehead_delivered,
+              original_filename  = COALESCE(original_filename, excluded.original_filename)
             """,
             (hash, filename, source_adapter, library_path, format, codec,
              duration_s, sample_rate, bit_depth, channels, file_size,
-             now, now, int(basehead_delivered)),
+             now, now, int(basehead_delivered), original_filename),
         )
         self._con.commit()
 

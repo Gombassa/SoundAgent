@@ -50,7 +50,7 @@ _XMP = """\
 
 # ── iXML builder ──────────────────────────────────────────────────────────────
 
-def build_ixml(ucs: UCSFields) -> str:
+def build_ixml(ucs: UCSFields, original_filename: str | None = None) -> str:
     root = ET.Element("IXML")
 
     speed = ET.SubElement(root, "SPEED")
@@ -66,6 +66,8 @@ def build_ixml(ucs: UCSFields) -> str:
         "MOOD":        ucs.mood,
         "ENERGY":      ucs.energy,
     }
+    if original_filename:
+        fields["ORIGFILENAME"] = original_filename
     if ucs.bpm is not None:
         fields["BPM"] = str(int(ucs.bpm))
     if ucs.key is not None:
@@ -98,8 +100,8 @@ def write_xmp_sidecar(path: Path, ucs: UCSFields) -> Path:
 
 # ── WAV/BWF via bwfmetaedit ───────────────────────────────────────────────────
 
-def _bwfmetaedit_write(path: Path, ucs: UCSFields) -> None:
-    xml = build_ixml(ucs)
+def _bwfmetaedit_write(path: Path, ucs: UCSFields, original_filename: str | None = None) -> None:
+    xml = build_ixml(ucs, original_filename)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".xml", delete=False, encoding="utf-8"
     ) as f:
@@ -121,9 +123,9 @@ def _bwfmetaedit_write(path: Path, ucs: UCSFields) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _embed_wav(path: Path, ucs: UCSFields) -> None:
+def _embed_wav(path: Path, ucs: UCSFields, original_filename: str | None = None) -> None:
     try:
-        _bwfmetaedit_write(path, ucs)
+        _bwfmetaedit_write(path, ucs, original_filename)
     except FileNotFoundError:
         log.warning(
             f"bwfmetaedit not found — writing XMP sidecar for {path.name}. "
@@ -212,11 +214,11 @@ def _embed_aiff(path: Path, ucs: UCSFields) -> None:
 
 # ── Public dispatch ───────────────────────────────────────────────────────────
 
-def embed(path: Path, ucs: UCSFields) -> None:
+def embed(path: Path, ucs: UCSFields, original_filename: str | None = None) -> None:
     """Embed UCS metadata into path in the format appropriate for its extension."""
     ext = path.suffix.lower()
     if ext in _EXT_WAV:
-        _embed_wav(path, ucs)
+        _embed_wav(path, ucs, original_filename)
     elif ext in _EXT_MP3:
         _embed_mp3(path, ucs)
     elif ext in _EXT_FLAC:

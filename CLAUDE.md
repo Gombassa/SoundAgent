@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SoundAgent is a tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them via the Claude API, embeds standardised metadata, routes them into a structured library, and delivers them to Basehead Ultra for search and spotting.
 
-**Status:** P1–P9 complete and committed. Full pipeline running end-to-end.
+**Status:** P1–P9 complete and committed. Hybrid UCS+slug file rename feature added post-P9.
 
 ## Commands
 
@@ -48,8 +48,9 @@ TICK START        → Cowork fires agent process
 4  VALIDATE       → Extension/format allowlist → reject to /_errors/
 5  STAGE          → Atomic copy to /_staging/ + ffprobe technical metadata
 6  AUDIO ANALYSIS → YAMNet + AudioCLIP always; Whisper if speech; Essentia if music
-7  ENRICH         → Claude API synthesises analysis results into professional metadata
-8  EMBED          → Write iXML/BWF (WAV) · ID3 (MP3) · XMP sidecar
+7  ENRICH         → Claude API synthesises analysis results + suggested_filename
+7a RENAME         → renamer.py: UCS+slug filename; original preserved in iXML + catalogue
+8  EMBED          → Write iXML/BWF (WAV) · ID3 (MP3) · XMP sidecar; ORIGFILENAME in iXML
 9  ROUTE          → Rules engine: enriched metadata → target library path
 10 DELIVER        → Atomic move → Basehead import folder, fully tagged
 11 CATALOGUE      → SQLite upsert + FTS5 index update
@@ -76,6 +77,21 @@ All ML imports (`tensorflow`, `whisper`, `torch`, `AudioCLIP`, `essentia`) are *
 Content-type routing from YAMNet determines which specialist models run: `"speech"` → Whisper; `"music"` → Essentia. AudioCLIP always runs (if weights available). Files longer than `max_analysis_duration_s` (default 120s): YAMNet/AudioCLIP run on first 60s; Whisper/Essentia skip.
 
 AudioCLIP weights must be downloaded manually to `models/audioclip/AudioCLIP.pt` (see README.md). The `models/` directory is gitignored; `models/.gitkeep` keeps the directory in the repo.
+
+### File renamer (`soundagent/renamer.py`)
+
+Runs as step 7a between ENRICH and EMBED. Generates hybrid UCS+slug filenames in the format:
+
+```
+{UCS_CATID}_{descriptive-slug}_{sample_rate}k{bit_depth}b.{ext}
+```
+
+Examples: `WTHR_rain-woodland-wind-light_96k24b.wav`, `AMB_traffic-exterior-busy_48k.mp3`
+
+- `suggested_filename` (UCS code + slug, no suffix/ext) comes from the Claude API response and is cached with the enrichment result.
+- `original_filename` (the staged name before rename) is set at runtime, stored in iXML `ORIGFILENAME` and the `files.original_filename` catalogue column.
+- Collision handling: appends `_2`, `_3` etc. before the extension.
+- Fallback: if `suggested_filename` is absent, sanitises the original stem + technical suffix and logs a warning. Never raises.
 
 ### Source adapters (all converge on `/_inbox/`)
 
@@ -128,7 +144,7 @@ audio_analysis:
 
 - Model: `claude-sonnet-4-6`
 - Claude's role is now **synthesis**, not inference: receives `AnalysisResult` alongside ffprobe metadata
-- New output schema: `category`, `subcategory`, `description`, `tags` (max 12), `mood`, `energy`, `usage_suggestions` (1–3 contexts), `bpm`, `musical_key`, `language`, `enrichment_confidence`, `notes`
+- New output schema: `category`, `subcategory`, `description`, `tags` (max 12), `mood`, `energy`, `usage_suggestions` (1–3 contexts), `bpm`, `musical_key`, `language`, `enrichment_confidence`, `notes`, `suggested_filename`
 - Expanded categories: `field | sfx | music | broadcast | voice | ambience`
 - Confidence scoring: analysis ran + clear detections → 0.75–0.95; fallback only + poor filename → 0.1–0.35
 - Enrichment cache: keyed on SHA-256; `run_on_existing=True` re-enriches files lacking analysis data
@@ -157,7 +173,9 @@ Filters: `q` (FTS), `category`, `content_type`, `source`, `min_duration`, `max_d
 
 `soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`. FTS5 virtual table `fts_search` indexes `description + tags + usage_suggestions + notes`; kept in sync via triggers. `_migrate()` in `Catalogue._init_schema()` handles schema evolution via `ALTER TABLE` for new columns + FTS5 rebuild. `open_catalogue(library_root)` is the public entry point.
 
-New enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, `whisper_summary`, `whisper_language`, `essentia_bpm`, `essentia_key`, `essentia_mood`, `essentia_genre`, `models_run`, `models_failed`, `analysis_duration_s`, `usage_suggestions`, `notes`.
+`files` table extra columns (post-P9): `original_filename` — the staged filename before UCS rename; preserved on first insert via `COALESCE` in the conflict clause.
+
+Enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, `whisper_summary`, `whisper_language`, `essentia_bpm`, `essentia_key`, `essentia_mood`, `essentia_genre`, `models_run`, `models_failed`, `analysis_duration_s`, `usage_suggestions`, `notes`.
 
 ## Key dependencies
 

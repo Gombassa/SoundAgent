@@ -46,7 +46,10 @@ _SYSTEM = (
     "When audio analysis data is provided, treat it as ground truth from ML models "
     "that have listened to the actual audio — synthesise and interpret those detections "
     "rather than guessing from the filename alone. "
-    "Return ONLY valid JSON — no markdown, no explanation, no code fences."
+    "Return ONLY valid JSON — no markdown, no explanation, no code fences. "
+    "For suggested_filename: output only the UCS code and slug "
+    "e.g. WTHR_rain-woodland-wind-light. "
+    "Do not include sample rate, bit depth, file extension, or index numbers."
 )
 
 
@@ -127,7 +130,8 @@ def _build_prompt(filename: str, meta: AudioMetadata, analysis_result: "Analysis
         '  "enrichment_confidence": <0.0–1.0>,',
         '  "usage_suggestions":    ["<use case>", ...],',
         '  "notes":                "<any notable characteristics or null>",',
-        '  "language":             "<ISO 639-1 code or null>"',
+        '  "language":             "<ISO 639-1 code or null>",',
+        '  "suggested_filename":   "<UCS code + slug only e.g. WTHR_rain-woodland-wind-light>"',
         '}',
         '',
         'Subcategory options per category:',
@@ -164,6 +168,8 @@ class EnrichmentResult:
     usage_suggestions: list[str] = _field(default_factory=list)
     notes: Optional[str] = None
     language: Optional[str] = None
+    suggested_filename: Optional[str] = None
+    original_filename: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -181,6 +187,7 @@ class EnrichmentResult:
             "usage_suggestions": self.usage_suggestions,
             "notes": self.notes,
             "language": self.language,
+            "suggested_filename": self.suggested_filename,
         }
 
     @classmethod
@@ -200,6 +207,7 @@ class EnrichmentResult:
             usage_suggestions=d.get("usage_suggestions", []),
             notes=d.get("notes"),
             language=d.get("language"),
+            suggested_filename=d.get("suggested_filename"),
         )
 
 
@@ -289,6 +297,9 @@ def _validate(data: dict) -> EnrichmentResult:
     confidence = float(data["enrichment_confidence"])
     confidence = max(0.0, min(1.0, confidence))
 
+    suggested_raw = data.get("suggested_filename")
+    suggested_filename = suggested_raw.strip() if isinstance(suggested_raw, str) and suggested_raw.strip() else None
+
     return EnrichmentResult(
         category=category,
         subcategory=subcategory,
@@ -303,6 +314,7 @@ def _validate(data: dict) -> EnrichmentResult:
         usage_suggestions=[str(s) for s in data.get("usage_suggestions", [])],
         notes=str(data["notes"]) if data.get("notes") is not None else None,
         language=str(data["language"]) if data.get("language") is not None else None,
+        suggested_filename=suggested_filename,
     )
 
 
@@ -319,6 +331,7 @@ def enrich(
     cached = cache.get(file_hash)
     if cached is not None:
         log.debug(f"Cache hit: {filename}")
+        cached.original_filename = filename
         return cached
 
     if not cfg.anthropic_api_key:
@@ -341,6 +354,7 @@ def enrich(
         result.content_type = analysis_result.content_type
 
     cache.set(file_hash, result)
+    result.original_filename = filename
 
     level = "low_confidence" if result.low_confidence else f"{result.category}/{result.subcategory}"
     log.info(f"Enriched: {filename} → {level} (confidence={result.confidence:.2f})")
