@@ -15,6 +15,13 @@ def main() -> None:
 
     sub.add_parser("init", help="Create library folder hierarchy")
 
+    webdav_cmd = sub.add_parser("webdav", help="Manage the WebDAV server")
+    webdav_sub = webdav_cmd.add_subparsers(dest="webdav_action", required=True)
+    webdav_sub.add_parser("start", help="Start WebDAV server as background process")
+    webdav_sub.add_parser("stop", help="Stop WebDAV server")
+    webdav_sub.add_parser("status", help="Show WebDAV server status")
+    webdav_sub.add_parser("_serve", help=argparse.SUPPRESS)   # internal — called by start
+
     query_cmd = sub.add_parser("query", help="Search the catalogue (Phase 6)")
     query_cmd.add_argument("--tag")
     query_cmd.add_argument("--category")
@@ -36,6 +43,18 @@ def main() -> None:
     elif args.command == "init":
         from soundagent.init_library import init_library
         init_library(cfg)
+
+    elif args.command == "webdav":
+        from soundagent import webdav_server
+        if args.webdav_action == "start":
+            webdav_server.start(cfg)
+        elif args.webdav_action == "stop":
+            webdav_server.stop(cfg)
+        elif args.webdav_action == "status":
+            running = webdav_server.is_running(cfg)
+            print("WebDAV server: running" if running else "WebDAV server: stopped")
+        elif args.webdav_action == "_serve":
+            webdav_server.serve(cfg)
 
     elif args.command == "query":
         print("Query interface not yet implemented (Phase 6)", file=sys.stderr)

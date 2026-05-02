@@ -13,8 +13,17 @@ soundagent/
 ├── logging_setup.py   Rotating file + console logging setup
 ├── init_library.py    Library folder hierarchy creator
 ├── ffprobe.py         ffprobe subprocess wrapper → AudioMetadata
-├── tick.py            Tick runner — orchestrates the pipeline per phase
-└── adapters/          Source adapter implementations (P2)
+├── tick.py            Tick runner — orchestrates full pipeline
+├── dedup.py           SHA-256 file hasher
+├── ingest.py          Extension allowlist validator + atomic stage_file()
+├── ingest_log.py      JSONL ingest event writer
+├── webdav_server.py   wsgidav server start/stop/status via subprocess + PID file
+└── adapters/
+    ├── __init__.py    get_adapter() factory
+    ├── base.py        BaseAdapter ABC
+    ├── local.py       LocalAdapter + NetworkAdapter (watchdog-style scan)
+    ├── rclone.py      RcloneAdapter (rclone copy; mount not yet implemented)
+    └── webdav.py      WebDAVAdapter (passive inbox scan; server managed separately)
 ```
 
 ---
@@ -154,28 +163,56 @@ class AudioMetadata:
 
 | Step | Description | Status |
 |---|---|---|
-| Health check | Check each enabled source adapter | P2 |
-| Scan | Adapters deliver files to `_inbox/` | P2 |
-| Dedup | SHA-256 → SQLite → skip known | P6 |
-| Validate | Extension/format allowlist → `_errors/` | P2 |
-| Stage | Atomic copy to `_staging/` + ffprobe | P2 |
+| Health check | Check each enabled source adapter | **Done (P2)** |
+| Scan | Adapters deliver files to `_inbox/` | **Done (P2)** |
+| Dedup | SHA-256 within-tick; catalogue dedup in P6 | **Partial (P2)** |
+| Validate | Extension/format allowlist → `_errors/` | **Done (P2)** |
+| Stage | Atomic copy to `_staging/` + ffprobe | **Done (P2)** |
 | Enrich | Claude API → structured JSON | P3 |
 | Embed | iXML/BWF · ID3 · XMP sidecar | P4 |
 | Route | Rules engine → target path | P5 |
 | Deliver | Atomic move → basehead_import_path | P5 |
 | Catalogue | SQLite upsert + FTS5 index | P6 |
-| Report | summary.json + log | **Done (P1)** |
+| Report | summary.json + ingest.log (JSONL) | **Done (P2)** |
 
 ---
+
+## Ingest adapters (P2)
+
+All adapters share the `BaseAdapter` ABC (`adapters/base.py`). The `inbox` property always resolves to `cfg.library_root / "_inbox"` — adapters must not write elsewhere.
+
+**`collect(dry_run) -> list[Path]`** is the only required method. It returns paths of files now in `_inbox/` ready for the pipeline.
+
+| Adapter | `is_available()` | `collect()` behaviour |
+|---|---|---|
+| `LocalAdapter` | `source_path.exists()` | Scans `options["path"]`; if same as inbox, enumerates in place; otherwise atomic-copies (copy2 + rename) then returns inbox paths |
+| `NetworkAdapter` | Same but wraps in `try/except OSError` | Skips with warning if unavailable |
+| `RcloneAdapter` | `rclone lsd remote: --max-depth 0` (10s timeout) | Snapshots inbox before, runs `rclone copy remote:path inbox/`, returns newly added files |
+| `WebDAVAdapter` | `webdav_server.is_running(cfg)` (PID file check) | Returns files already in inbox; does not start/stop server |
+
+**WebDAV server lifecycle** (`webdav_server.py`):
+- `start()` launches a detached subprocess running `soundagent webdav _serve`, writes PID to `<library_root>/webdav.pid`
+- `stop()` reads PID, terminates via `taskkill /F` (Windows) or SIGTERM (Unix), removes PID file
+- `serve()` is the internal blocking loop (wsgidav + wsgiref), called only by `_serve` subcommand
+- Password read from `SOUNDAGENT_WEBDAV_PASSWORD` env var
+
+**Ingest pipeline** (`tick.py` steps 1–5):
+1. Each enabled source: `is_available()` → skip with warning if false
+2. `collect()` → raw file list with source name
+3. SHA-256 dedup within the tick (same hash seen twice → skip second; cross-tick dedup in P6)
+4. Extension allowlist (`ingest.py:ALLOWED_EXTENSIONS`) → rejected files moved to `_errors/`
+5. `stage_file()` → atomic copy to `_staging/`, collision-safe (appends 8-char hash fragment); `ffprobe.extract()` runs on staging path; src unlinked from inbox only after successful stage
+
+Events written to `<library_root>/ingest.log` (JSONL, one record per file):
+```json
+{"timestamp": "...", "filename": "kick.wav", "hash": "abc...", "source": "local-inbox", "status": "staged", "duration_s": 2.1, "sample_rate": 48000, "codec": "pcm_s24le"}
+```
+Status values: `staged` | `rejected` | `error`
 
 ## Planned modules (not yet built)
 
 | Module | Phase | Purpose |
 |---|---|---|
-| `soundagent/adapters/local.py` | P2 | watchdog-based local/network ingest |
-| `soundagent/adapters/rclone.py` | P2 | rclone sync or mount wrapper |
-| `soundagent/adapters/webdav.py` | P2 | wsgidav background server |
-| `soundagent/dedup.py` | P2/P6 | SHA-256 hasher + SQLite dedup check |
 | `soundagent/enrichment.py` | P3 | Claude API client, prompt, response parser |
 | `soundagent/embed.py` | P4 | bwfmetaedit / mutagen / XMP writer |
 | `soundagent/ucs.py` | P4 | Enrichment → UCS field mapper |
