@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SoundAgent is a tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them via the Claude API, embeds standardised metadata, routes them into a structured library, and delivers them to Basehead Ultra for search and spotting.
 
-**Status:** P1–P6 complete and committed. Audio analysis integration (new ML pipeline stage before Claude enrichment) is the current work.
+**Status:** P1–P9 complete and committed. Full pipeline running end-to-end.
 
 ## Commands
 
@@ -17,15 +17,21 @@ scripts\install_audio_deps.bat                   # install ML model dependencies
 
 python -m soundagent tick                         # run one agent tick
 python -m soundagent tick --dry-run              # log intended actions, no filesystem writes
-python -m soundagent query rain water            # FTS search (description + tags)
-python -m soundagent query --category field --min-duration 30  # filtered search
-python -m soundagent query --content-type music --confidence-min 0.8
-python -m soundagent query --language en --json  # raw JSON output
 python -m soundagent init                        # create folder hierarchy from config
+
+python -m soundagent query rain water            # FTS search (description + tags)
+python -m soundagent query --category field --min-duration 30 --max-duration 120
+python -m soundagent query --content-type music --min-bpm 120 --max-bpm 140
+python -m soundagent query --confidence-min 0.8 --limit 20
+python -m soundagent query --language en --source local --json
+
+python -m soundagent webdav start                # start WebDAV server as background process
+python -m soundagent webdav stop
+python -m soundagent webdav status
 
 pytest                                           # run all tests
 pytest tests/test_ingest.py                      # single test file
-uvicorn soundagent.api:app --reload             # Phase 8 search UI dev server
+uvicorn soundagent.api:app --reload             # Phase 9 search UI dev server
 ```
 
 ## Architecture
@@ -133,6 +139,19 @@ audio_analysis:
 - MP3: ID3 tags via `mutagen`
 - Other formats: XMP sidecar file
 - UCS field mapper converts enrichment output to UCS-compatible layout for Basehead import
+
+### Search UI (Phase 9)
+
+FastAPI + HTMX app (`soundagent/api.py`). Config loaded from `SOUNDAGENT_CONFIG` env var (default `config.yaml`).
+
+Routes:
+- `GET /` — index with filter dropdowns and total count
+- `GET /search` — HTMX partial: FTS + filter results (HTML fragment)
+- `GET /file/{hash}` — detail view for a single file
+- `GET /audio/{hash}` — stream audio file from library path
+- `GET /export.csv` — CSV export of current search results
+
+Filters: `q` (FTS), `category`, `content_type`, `source`, `min_duration`, `max_duration`, `min_bpm`, `max_bpm`, `min_confidence`, `limit` (default 200; 5000 for CSV).
 
 ### SQLite catalogue (Phase 6 — updated)
 
