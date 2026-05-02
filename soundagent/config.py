@@ -21,6 +21,7 @@ class Config:
     log_level: str
     sources: list[SourceConfig]
     anthropic_api_key: str
+    audio_analysis: dict
     raw: dict
 
 
@@ -60,5 +61,6 @@ def load_config(path: str = "config.yaml") -> Config:
         log_level=raw.get("log_level", "INFO"),
         sources=sources,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", raw.get("anthropic_api_key", "")),
+        audio_analysis=raw.get("audio_analysis", {}),
         raw=raw,
     )

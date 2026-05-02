@@ -28,6 +28,14 @@ CATID_MAP: dict[tuple[str, str], str] = {
     ("broadcast", "idents"):      "BRD-IDNT",
     ("broadcast", "vo"):          "BRD-VO",
     ("broadcast", "transitions"): "BRD-TRAN",
+    ("voice",     "dialogue"):    "VOC-DIAL",
+    ("voice",     "narration"):   "VOC-NARR",
+    ("voice",     "interview"):   "VOC-INTV",
+    ("voice",     "speech"):      "VOC-SPCH",
+    ("ambience",  "nature"):      "AMB-NATU",
+    ("ambience",  "urban"):       "AMB-URBN",
+    ("ambience",  "indoor"):      "AMB-INDR",
+    ("ambience",  "mixed"):       "AMB-MIXD",
 }
 
 

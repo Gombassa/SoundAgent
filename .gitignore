@@ -10,3 +10,12 @@ config.yaml
 *.log
 summary.json
 soundlibrary.db
+
+# ML model weights (never commit)
+models/**
+!models/.gitkeep
+.cache/
+*.pt
+*.pth
+*.onnx
+*.bin

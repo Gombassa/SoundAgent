@@ -4,8 +4,8 @@ SQLite catalogue — persistent record of every file the agent has processed.
 Schema
 ------
 files        : one row per unique file (SHA-256 PK), technical + routing metadata
-enrichment   : Claude enrichment result linked to files.hash
-fts_search   : FTS5 virtual table over description + tags for full-text search
+enrichment   : Claude enrichment result linked to files.hash (26 columns as of P7)
+fts_search   : FTS5 virtual table over description+tags+usage_suggestions+notes
 ingest_log   : append-only event log (mirrors the JSONL ingest.log in structured form)
 
 Dedup
@@ -13,6 +13,12 @@ Dedup
 On each tick, sha256 of every inbox file is checked against files.hash before
 any processing starts. Known hashes are skipped entirely — this replaces the
 within-tick-only dedup from P2.
+
+Migration
+---------
+_migrate() adds columns to existing enrichment rows and rebuilds the FTS5 virtual
+table when needed. FTS5 tables cannot be ALTERed; the rebuild drops triggers, drops
+and recreates the table, repopulates from enrichment, and recreates triggers.
 """
 
 import json
@@ -46,18 +52,33 @@ CREATE TABLE IF NOT EXISTS files (
 );
 
 CREATE TABLE IF NOT EXISTS enrichment (
-    hash            TEXT PRIMARY KEY REFERENCES files(hash),
-    category        TEXT,
-    subcategory     TEXT,
-    cat_id          TEXT,
-    description     TEXT,
-    tags            TEXT,   -- JSON array
-    mood            TEXT,
-    energy          TEXT,
-    bpm             REAL,
-    key             TEXT,
-    confidence      REAL,
-    low_confidence  INTEGER
+    hash                TEXT PRIMARY KEY REFERENCES files(hash),
+    category            TEXT,
+    subcategory         TEXT,
+    cat_id              TEXT,
+    description         TEXT,
+    tags                TEXT,   -- JSON array
+    mood                TEXT,
+    energy              TEXT,
+    bpm                 REAL,
+    key                 TEXT,
+    confidence          REAL,
+    low_confidence      INTEGER,
+    -- P7 audio analysis columns
+    content_type        TEXT,
+    usage_suggestions   TEXT,   -- JSON array
+    notes               TEXT,
+    language            TEXT,
+    yamnet_classes      TEXT,   -- JSON array
+    audioclip_matches   TEXT,   -- JSON array of {prompt, score}
+    whisper_summary     TEXT,
+    whisper_language    TEXT,
+    essentia_bpm        REAL,
+    essentia_key        TEXT,
+    essentia_mood       TEXT,   -- JSON dict
+    essentia_genre      TEXT,   -- JSON dict
+    models_run          TEXT,   -- JSON array
+    models_failed       TEXT    -- JSON array
 );
 
 CREATE TABLE IF NOT EXISTS ingest_log (
@@ -74,31 +95,111 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_search USING fts5(
     hash UNINDEXED,
     description,
     tags,
+    usage_suggestions,
+    notes,
     content='enrichment',
     content_rowid='rowid'
 );
 
 CREATE TRIGGER IF NOT EXISTS enrichment_ai AFTER INSERT ON enrichment BEGIN
-    INSERT INTO fts_search(rowid, hash, description, tags)
-    VALUES (new.rowid, new.hash, new.description, new.tags);
+    INSERT INTO fts_search(rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES (new.rowid, new.hash, new.description, new.tags, new.usage_suggestions, new.notes);
 END;
 
 CREATE TRIGGER IF NOT EXISTS enrichment_ad AFTER DELETE ON enrichment BEGIN
-    INSERT INTO fts_search(fts_search, rowid, hash, description, tags)
-    VALUES ('delete', old.rowid, old.hash, old.description, old.tags);
+    INSERT INTO fts_search(fts_search, rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES ('delete', old.rowid, old.hash, old.description, old.tags, old.usage_suggestions, old.notes);
 END;
 
 CREATE TRIGGER IF NOT EXISTS enrichment_au AFTER UPDATE ON enrichment BEGIN
-    INSERT INTO fts_search(fts_search, rowid, hash, description, tags)
-    VALUES ('delete', old.rowid, old.hash, old.description, old.tags);
-    INSERT INTO fts_search(rowid, hash, description, tags)
-    VALUES (new.rowid, new.hash, new.description, new.tags);
+    INSERT INTO fts_search(fts_search, rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES ('delete', old.rowid, old.hash, old.description, old.tags, old.usage_suggestions, old.notes);
+    INSERT INTO fts_search(rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES (new.rowid, new.hash, new.description, new.tags, new.usage_suggestions, new.notes);
 END;
 """
+
+# Columns to add in migration (name, SQL type)
+_NEW_ENRICHMENT_COLUMNS = [
+    ("content_type",      "TEXT"),
+    ("usage_suggestions", "TEXT"),
+    ("notes",             "TEXT"),
+    ("language",          "TEXT"),
+    ("yamnet_classes",    "TEXT"),
+    ("audioclip_matches", "TEXT"),
+    ("whisper_summary",   "TEXT"),
+    ("whisper_language",  "TEXT"),
+    ("essentia_bpm",      "REAL"),
+    ("essentia_key",      "TEXT"),
+    ("essentia_mood",     "TEXT"),
+    ("essentia_genre",    "TEXT"),
+    ("models_run",        "TEXT"),
+    ("models_failed",     "TEXT"),
+]
+
+_FTS_TRIGGERS = (
+    """CREATE TRIGGER IF NOT EXISTS enrichment_ai AFTER INSERT ON enrichment BEGIN
+    INSERT INTO fts_search(rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES (new.rowid, new.hash, new.description, new.tags, new.usage_suggestions, new.notes);
+END""",
+    """CREATE TRIGGER IF NOT EXISTS enrichment_ad AFTER DELETE ON enrichment BEGIN
+    INSERT INTO fts_search(fts_search, rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES ('delete', old.rowid, old.hash, old.description, old.tags, old.usage_suggestions, old.notes);
+END""",
+    """CREATE TRIGGER IF NOT EXISTS enrichment_au AFTER UPDATE ON enrichment BEGIN
+    INSERT INTO fts_search(fts_search, rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES ('delete', old.rowid, old.hash, old.description, old.tags, old.usage_suggestions, old.notes);
+    INSERT INTO fts_search(rowid, hash, description, tags, usage_suggestions, notes)
+    VALUES (new.rowid, new.hash, new.description, new.tags, new.usage_suggestions, new.notes);
+END""",
+)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Add P7 columns to enrichment and rebuild FTS5 if needed."""
+    existing = {row[1] for row in con.execute("PRAGMA table_info(enrichment)").fetchall()}
+    for col_name, col_type in _NEW_ENRICHMENT_COLUMNS:
+        if col_name not in existing:
+            con.execute(f"ALTER TABLE enrichment ADD COLUMN {col_name} {col_type}")
+            log.debug(f"Migration: added enrichment.{col_name}")
+
+    # Check if FTS includes usage_suggestions; rebuild if not
+    fts_needs_rebuild = False
+    try:
+        con.execute("SELECT usage_suggestions FROM fts_search LIMIT 1")
+    except sqlite3.OperationalError:
+        fts_needs_rebuild = True
+
+    if fts_needs_rebuild:
+        log.info("Rebuilding FTS5 index to include usage_suggestions and notes")
+        con.execute("DROP TRIGGER IF EXISTS enrichment_ai")
+        con.execute("DROP TRIGGER IF EXISTS enrichment_ad")
+        con.execute("DROP TRIGGER IF EXISTS enrichment_au")
+        con.execute("DROP TABLE IF EXISTS fts_search")
+        con.execute("""
+            CREATE VIRTUAL TABLE fts_search USING fts5(
+                hash UNINDEXED,
+                description,
+                tags,
+                usage_suggestions,
+                notes,
+                content='enrichment',
+                content_rowid='rowid'
+            )
+        """)
+        con.execute("""
+            INSERT INTO fts_search(rowid, hash, description, tags, usage_suggestions, notes)
+            SELECT rowid, hash, description, tags, usage_suggestions, notes
+            FROM enrichment
+        """)
+        for trigger_sql in _FTS_TRIGGERS:
+            con.execute(trigger_sql)
+
+    con.commit()
 
 
 class Catalogue:
@@ -111,6 +212,7 @@ class Catalogue:
     def _init_schema(self) -> None:
         self._con.executescript(_SCHEMA)
         self._con.commit()
+        _migrate(self._con)
 
     def close(self) -> None:
         self._con.close()
@@ -175,23 +277,63 @@ class Catalogue:
         key: Optional[str],
         confidence: float,
         low_confidence: bool,
+        # P7 audio analysis fields (all optional for backward compat)
+        content_type: Optional[str] = None,
+        usage_suggestions: Optional[list[str]] = None,
+        notes: Optional[str] = None,
+        language: Optional[str] = None,
+        yamnet_classes: Optional[list[str]] = None,
+        audioclip_matches: Optional[list[dict]] = None,
+        whisper_summary: Optional[str] = None,
+        whisper_language: Optional[str] = None,
+        essentia_bpm: Optional[float] = None,
+        essentia_key: Optional[str] = None,
+        essentia_mood: Optional[dict] = None,
+        essentia_genre: Optional[dict] = None,
+        models_run: Optional[list[str]] = None,
+        models_failed: Optional[list[str]] = None,
     ) -> None:
+        def _j(x):
+            return json.dumps(x) if x is not None else None
+
         self._con.execute(
             """
             INSERT INTO enrichment
               (hash, category, subcategory, cat_id, description, tags,
-               mood, energy, bpm, key, confidence, low_confidence)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               mood, energy, bpm, key, confidence, low_confidence,
+               content_type, usage_suggestions, notes, language,
+               yamnet_classes, audioclip_matches, whisper_summary, whisper_language,
+               essentia_bpm, essentia_key, essentia_mood, essentia_genre,
+               models_run, models_failed)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(hash) DO UPDATE SET
               category=excluded.category, subcategory=excluded.subcategory,
               cat_id=excluded.cat_id, description=excluded.description,
               tags=excluded.tags, mood=excluded.mood, energy=excluded.energy,
               bpm=excluded.bpm, key=excluded.key, confidence=excluded.confidence,
-              low_confidence=excluded.low_confidence
+              low_confidence=excluded.low_confidence,
+              content_type=excluded.content_type,
+              usage_suggestions=excluded.usage_suggestions,
+              notes=excluded.notes,
+              language=excluded.language,
+              yamnet_classes=excluded.yamnet_classes,
+              audioclip_matches=excluded.audioclip_matches,
+              whisper_summary=excluded.whisper_summary,
+              whisper_language=excluded.whisper_language,
+              essentia_bpm=excluded.essentia_bpm,
+              essentia_key=excluded.essentia_key,
+              essentia_mood=excluded.essentia_mood,
+              essentia_genre=excluded.essentia_genre,
+              models_run=excluded.models_run,
+              models_failed=excluded.models_failed
             """,
             (hash, category, subcategory, cat_id, description,
-             json.dumps(tags), mood, energy, bpm, key,
-             confidence, int(low_confidence)),
+             _j(tags), mood, energy, bpm, key,
+             confidence, int(low_confidence),
+             content_type, _j(usage_suggestions), notes, language,
+             _j(yamnet_classes), _j(audioclip_matches), whisper_summary, whisper_language,
+             essentia_bpm, essentia_key, _j(essentia_mood), _j(essentia_genre),
+             _j(models_run), _j(models_failed)),
         )
         self._con.commit()
 
@@ -217,14 +359,24 @@ class Catalogue:
         min_bpm: Optional[float] = None,
         max_bpm: Optional[float] = None,
         source: Optional[str] = None,
+        content_type: Optional[str] = None,
+        whisper_language: Optional[str] = None,
+        min_confidence: Optional[float] = None,
         limit: int = 50,
     ) -> list[dict]:
+        base_select = """
+            SELECT f.*, e.category, e.subcategory, e.cat_id,
+                   e.description, e.tags, e.mood, e.energy,
+                   e.bpm, e.key, e.confidence, e.low_confidence,
+                   e.content_type, e.usage_suggestions, e.notes, e.language,
+                   e.yamnet_classes, e.audioclip_matches,
+                   e.whisper_summary, e.whisper_language,
+                   e.essentia_bpm, e.essentia_key,
+                   e.models_run, e.models_failed
+        """
+
         if query:
-            # FTS search — join back to files + enrichment
-            sql = """
-                SELECT f.*, e.category, e.subcategory, e.cat_id,
-                       e.description, e.tags, e.mood, e.energy,
-                       e.bpm, e.key, e.confidence
+            sql = base_select + """
                 FROM fts_search fs
                 JOIN enrichment e ON e.hash = fs.hash
                 JOIN files f ON f.hash = e.hash
@@ -232,10 +384,7 @@ class Catalogue:
             """
             params: list = [query]
         else:
-            sql = """
-                SELECT f.*, e.category, e.subcategory, e.cat_id,
-                       e.description, e.tags, e.mood, e.energy,
-                       e.bpm, e.key, e.confidence
+            sql = base_select + """
                 FROM files f
                 LEFT JOIN enrichment e ON e.hash = f.hash
                 WHERE 1=1
@@ -263,6 +412,15 @@ class Catalogue:
         if source:
             sql += " AND f.source_adapter = ?"
             params.append(source)
+        if content_type:
+            sql += " AND e.content_type = ?"
+            params.append(content_type)
+        if whisper_language:
+            sql += " AND e.whisper_language = ?"
+            params.append(whisper_language)
+        if min_confidence is not None:
+            sql += " AND e.confidence >= ?"
+            params.append(min_confidence)
 
         sql += f" LIMIT {int(limit)}"
 
@@ -270,11 +428,13 @@ class Catalogue:
         results = []
         for row in rows:
             d = dict(row)
-            if d.get("tags"):
-                try:
-                    d["tags"] = json.loads(d["tags"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            for json_col in ("tags", "usage_suggestions", "yamnet_classes",
+                             "audioclip_matches", "models_run", "models_failed"):
+                if d.get(json_col):
+                    try:
+                        d[json_col] = json.loads(d[json_col])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
             results.append(d)
         return results
 

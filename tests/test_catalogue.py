@@ -256,3 +256,118 @@ def test_search_limit(cat):
 
 def test_integrity_check_passes(cat):
     assert cat.integrity_check() is True
+
+
+# ── P7 audio analysis columns ─────────────────────────────────────────────────
+
+def test_upsert_enrichment_writes_content_type(cat):
+    _insert_file(cat)
+    cat.upsert_enrichment(
+        hash="abc123",
+        category="sfx",
+        subcategory="impacts",
+        cat_id="SFX-IMPA",
+        description="bang",
+        tags=["bang"],
+        mood="tense",
+        energy="high",
+        bpm=None,
+        key=None,
+        confidence=0.9,
+        low_confidence=False,
+        content_type="sfx_or_field",
+    )
+    row = cat._con.execute("SELECT content_type FROM enrichment WHERE hash='abc123'").fetchone()
+    assert row[0] == "sfx_or_field"
+
+
+def test_upsert_enrichment_json_serialises_yamnet_classes(cat):
+    _insert_file(cat)
+    cat.upsert_enrichment(
+        hash="abc123",
+        category="sfx",
+        subcategory="impacts",
+        cat_id="SFX-IMPA",
+        description="bang",
+        tags=[],
+        mood="",
+        energy="high",
+        bpm=None,
+        key=None,
+        confidence=0.9,
+        low_confidence=False,
+        yamnet_classes=["Gunshot", "Explosion"],
+        models_run=["yamnet"],
+        models_failed=[],
+    )
+    row = cat._con.execute("SELECT yamnet_classes, models_run FROM enrichment WHERE hash='abc123'").fetchone()
+    import json
+    assert json.loads(row[0]) == ["Gunshot", "Explosion"]
+    assert json.loads(row[1]) == ["yamnet"]
+
+
+def test_search_by_content_type(cat):
+    _populate(cat)
+    # Update one record to have a content_type
+    cat._con.execute("UPDATE enrichment SET content_type='music' WHERE hash='h2'")
+    cat._con.commit()
+    results = cat.search(content_type="music")
+    assert len(results) == 1
+    assert results[0]["hash"] == "h2"
+
+
+def test_search_by_whisper_language(cat):
+    _populate(cat)
+    cat._con.execute("UPDATE enrichment SET whisper_language='fr' WHERE hash='h1'")
+    cat._con.commit()
+    results = cat.search(whisper_language="fr")
+    assert len(results) == 1
+    assert results[0]["hash"] == "h1"
+
+
+def test_search_min_confidence(cat):
+    _populate(cat)
+    results = cat.search(min_confidence=0.90)
+    # h1 has confidence 0.92, h2 has 0.88
+    assert len(results) == 1
+    assert results[0]["hash"] == "h1"
+
+
+# ── Migration ─────────────────────────────────────────────────────────────────
+
+def test_migration_adds_p7_columns(tmp_path):
+    """Opening a DB created by the current schema has all 26 enrichment columns."""
+    from soundagent.catalogue import Catalogue
+    cat = Catalogue(tmp_path / "test.db")
+    cols = {row[1] for row in cat._con.execute("PRAGMA table_info(enrichment)").fetchall()}
+    for expected in ("content_type", "yamnet_classes", "audioclip_matches",
+                     "whisper_summary", "whisper_language", "essentia_bpm",
+                     "essentia_key", "models_run", "models_failed",
+                     "usage_suggestions", "notes", "language"):
+        assert expected in cols, f"Missing column: {expected}"
+    cat.close()
+
+
+def test_fts_search_includes_usage_suggestions(tmp_path):
+    """FTS5 index includes usage_suggestions so they are searchable."""
+    from soundagent.catalogue import Catalogue
+    cat = Catalogue(tmp_path / "test.db")
+    _insert_file(cat)
+    cat.upsert_enrichment(
+        hash="abc123",
+        category="field",
+        subcategory="nature",
+        cat_id="AMB-NATU",
+        description="rain on roof",
+        tags=[],
+        mood="calm",
+        energy="low",
+        bpm=None,
+        key=None,
+        confidence=0.85,
+        low_confidence=False,
+        usage_suggestions=["documentary underlay"],
+    )
+    results = cat.search(query="documentary")
+    assert len(results) == 1
+    cat.close()

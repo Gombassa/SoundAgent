@@ -26,7 +26,10 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     errors_dir = cfg.library_root / "_errors"
     staging_dir = cfg.library_root / "_staging"
     ingest_log = IngestLog(cfg.library_root / "ingest.log")
-    cache = EnrichmentCache(cfg.library_root / "enrichment_cache.json")
+    cache = EnrichmentCache(
+        cfg.library_root / "enrichment_cache.json",
+        run_on_existing=cfg.audio_analysis.get("run_on_existing", False),
+    )
     catalogue = open_catalogue(cfg.library_root)
     errors: list[str] = []
 
@@ -99,13 +102,34 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(f.name, h, adapter_name, "error", error=str(exc))
             errors.append(f.name)
 
-    # ── 6: enrich ────────────────────────────────────────────────────────────
-    enriched: list[tuple[Path, str, str, AudioMetadata, object]] = []
-    unclassified_dir = cfg.library_root / "unclassified"
+    # ── 6: audio analysis ────────────────────────────────────────────────────
+    from soundagent.audio_analysis.pipeline import analyse as audio_analyse
+
+    analysed: list[tuple[Path, str, str, AudioMetadata, object]] = []
     for staging_path, h, adapter_name, meta in staged:
         try:
-            result = enrich(staging_path.name, h, meta, cfg, cache)
-            enriched.append((staging_path, h, adapter_name, meta, result))
+            audio_result = audio_analyse(
+                str(staging_path), h, cfg.audio_analysis,
+                duration_s=meta.duration_s,
+                anthropic_api_key=cfg.anthropic_api_key,
+            )
+            analysed.append((staging_path, h, adapter_name, meta, audio_result))
+            log.info(
+                f"Audio analysis: {staging_path.name} "
+                f"[{audio_result.content_type}, models={audio_result.models_run}]"
+            )
+        except Exception as exc:
+            log.error(f"Audio analysis failed for {staging_path.name}: {exc}")
+            # Fall back to filename-only enrichment rather than dropping the file
+            from soundagent.audio_analysis.result import AnalysisResult
+            analysed.append((staging_path, h, adapter_name, meta, AnalysisResult.fallback(h)))
+
+    # ── 7: enrich ────────────────────────────────────────────────────────────
+    enriched: list[tuple[Path, str, str, AudioMetadata, object, object]] = []
+    for staging_path, h, adapter_name, meta, audio_result in analysed:
+        try:
+            result = enrich(staging_path.name, h, meta, audio_result, cfg, cache)
+            enriched.append((staging_path, h, adapter_name, meta, result, audio_result))
             ingest_log.write(
                 staging_path.name, h, adapter_name, "enriched",
                 category=result.category,
@@ -118,16 +142,16 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(staging_path.name, h, adapter_name, "enrich_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── 7: embed metadata ────────────────────────────────────────────────────
+    # ── 8: embed metadata ────────────────────────────────────────────────────
     from soundagent.ucs import map_to_ucs
     from soundagent.embed import embed
 
     embedded: list[tuple] = []
-    for staging_path, h, adapter_name, meta, result in enriched:
+    for staging_path, h, adapter_name, meta, result, audio_result in enriched:
         try:
             ucs = map_to_ucs(result, staging_path.name)
             embed(staging_path, ucs)
-            embedded.append((staging_path, h, adapter_name, meta, result, ucs))
+            embedded.append((staging_path, h, adapter_name, meta, result, audio_result, ucs))
             ingest_log.write(
                 staging_path.name, h, adapter_name, "embedded",
                 cat_id=ucs.cat_id,
@@ -138,11 +162,11 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(staging_path.name, h, adapter_name, "embed_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── 8+9: route + deliver ─────────────────────────────────────────────────
+    # ── 9+10: route + deliver ─────────────────────────────────────────────────
     from soundagent.router import route, deliver
 
     delivered: list[dict] = []
-    for staging_path, h, adapter_name, meta, result, ucs in embedded:
+    for staging_path, h, adapter_name, meta, result, audio_result, ucs in embedded:
         try:
             decision = route(staging_path, result, cfg)
             final_path = deliver(staging_path, decision, h, dry_run=False)
@@ -177,13 +201,29 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 "energy": result.energy,
                 "bpm": result.bpm,
                 "key": result.key,
+                "content_type": result.content_type,
+                "usage_suggestions": result.usage_suggestions,
+                "notes": result.notes,
+                "language": result.language,
+                # audio analysis fields for catalogue
+                "yamnet_classes": audio_result.yamnet_classes,
+                "audioclip_matches": audio_result.audioclip_matches,
+                "whisper_summary": audio_result.whisper_summary,
+                "whisper_language": audio_result.whisper_language,
+                "essentia_bpm": audio_result.essentia_bpm,
+                "essentia_key": audio_result.essentia_key,
+                "essentia_mood": audio_result.essentia_mood,
+                "essentia_genre": audio_result.essentia_genre,
+                "models_run": audio_result.models_run,
+                "models_failed": audio_result.models_failed,
+                "analysis_duration_s": audio_result.analysis_duration_s,
             })
         except Exception as exc:
             log.error(f"Routing/delivery failed for {staging_path.name}: {exc}")
             ingest_log.write(staging_path.name, h, adapter_name, "route_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── 10: catalogue upsert ─────────────────────────────────────────────────
+    # ── 11: catalogue upsert ─────────────────────────────────────────────────
     for rec in delivered:
         try:
             catalogue.upsert_file(
@@ -212,6 +252,20 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 key=rec.get("key"),
                 confidence=rec["confidence"],
                 low_confidence=rec["low_confidence"],
+                content_type=rec.get("content_type"),
+                usage_suggestions=rec.get("usage_suggestions"),
+                notes=rec.get("notes"),
+                language=rec.get("language"),
+                yamnet_classes=rec.get("yamnet_classes"),
+                audioclip_matches=rec.get("audioclip_matches"),
+                whisper_summary=rec.get("whisper_summary"),
+                whisper_language=rec.get("whisper_language"),
+                essentia_bpm=rec.get("essentia_bpm"),
+                essentia_key=rec.get("essentia_key"),
+                essentia_mood=rec.get("essentia_mood"),
+                essentia_genre=rec.get("essentia_genre"),
+                models_run=rec.get("models_run"),
+                models_failed=rec.get("models_failed"),
             )
             catalogue.log_event(
                 rec["filename"], rec["hash"], rec["source"], "delivered",

@@ -9,3 +9,16 @@ tenacity
 fastapi
 uvicorn[standard]
 alembic
+soundfile
+scipy
+numpy
+
+# ── P7 audio analysis — optional ML dependencies ─────────────────────────────
+# Install via scripts/install_audio_deps.bat or manually:
+# tensorflow
+# tensorflow-hub
+# openai-whisper
+# torch
+# torchaudio
+# AudioCLIP  →  git clone https://github.com/AndreyGuzhov/AudioCLIP && pip install -e ./AudioCLIP
+# essentia   →  pip install essentia  (Linux/macOS; Windows: essentia-tensorflow wheel)

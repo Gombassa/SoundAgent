@@ -33,6 +33,9 @@ def main() -> None:
     query_cmd.add_argument("--min-bpm", type=float, metavar="BPM")
     query_cmd.add_argument("--max-bpm", type=float, metavar="BPM")
     query_cmd.add_argument("--limit", type=int, default=50, metavar="N")
+    query_cmd.add_argument("--content-type", metavar="TYPE", dest="content_type")
+    query_cmd.add_argument("--language", metavar="LANG")
+    query_cmd.add_argument("--confidence-min", type=float, metavar="SCORE", dest="confidence_min")
     query_cmd.add_argument("--json", action="store_true", dest="as_json",
                            help="Output raw JSON")
 
@@ -79,6 +82,9 @@ def main() -> None:
             max_duration=args.max_duration,
             min_bpm=args.min_bpm,
             max_bpm=args.max_bpm,
+            content_type=args.content_type,
+            whisper_language=args.language,
+            min_confidence=args.confidence_min,
             limit=args.limit,
         )
         cat.close()

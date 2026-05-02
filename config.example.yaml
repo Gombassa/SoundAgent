@@ -9,6 +9,32 @@ basehead_import_path: D:\SoundAgent   # Basehead watches this whole folder tree;
 tick_interval: 300        # seconds — used by Cowork to schedule the next tick
 log_level: INFO
 
+# ── Audio analysis (P7) ──────────────────────────────────────────────────────
+audio_analysis:
+  enabled: true
+
+  # Files longer than this (seconds) skip Whisper and Essentia; YAMNet/AudioCLIP
+  # analyse only the first truncate_waveform_s seconds instead.
+  max_analysis_duration_s: 120
+  truncate_waveform_s: 60
+
+  # YAMNet content-type thresholds (0–1 summed class scores)
+  speech_threshold: 0.4
+  music_threshold: 0.3
+
+  # Whisper model: tiny | base | small | medium | large
+  whisper_model: base
+
+  # AudioCLIP weights — download manually, ~800 MB
+  # See README for download instructions
+  audioclip_weights_path: models/audioclip/AudioCLIP.pt
+
+  # AudioCLIP score threshold; only matches above this are stored
+  audioclip_threshold: 0.2
+
+  # Set true to re-run audio analysis on files that were enriched before P7
+  run_on_existing: false
+
 sources:
 
   # ── Local / existing libraries ──────────────────────────────────────────────
