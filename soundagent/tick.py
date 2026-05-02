@@ -17,6 +17,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     from soundagent.ingest import is_allowed, stage_file
     from soundagent.ingest_log import IngestLog
     from soundagent.enrichment import EnrichmentCache, enrich
+    from soundagent.catalogue import open_catalogue
 
     start = time.monotonic()
     mode = " (dry-run)" if dry_run else ""
@@ -26,7 +27,11 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     staging_dir = cfg.library_root / "_staging"
     ingest_log = IngestLog(cfg.library_root / "ingest.log")
     cache = EnrichmentCache(cfg.library_root / "enrichment_cache.json")
+    catalogue = open_catalogue(cfg.library_root)
     errors: list[str] = []
+
+    if not catalogue.integrity_check():
+        log.warning("Catalogue integrity check failed — proceeding cautiously")
 
     # ── 1+2: adapter health check + scan ─────────────────────────────────────
     raw_files: list[tuple[Path, str]] = []
@@ -46,13 +51,17 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
         _write_summary(cfg, start, dry_run, [], errors, active)
         return 0
 
-    # ── 3: dedup (within-tick; catalogue dedup in P6) ────────────────────────
+    # ── 3: dedup (within-tick + cross-tick via catalogue) ────────────────────
     seen_hashes: dict[str, str] = {}
     deduped: list[tuple[Path, str, str]] = []
     for f, adapter_name in raw_files:
         h = sha256(f)
         if h in seen_hashes:
             log.info(f"Duplicate of {seen_hashes[h]!r}, skipping {f.name}")
+            continue
+        if catalogue.is_known(h):
+            log.info(f"Already in catalogue, skipping {f.name}")
+            catalogue.log_event(f.name, h, adapter_name, "skipped_known")
             continue
         seen_hashes[h] = f.name
         deduped.append((f, h, adapter_name))
@@ -153,15 +162,66 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 "confidence": result.confidence,
                 "low_confidence": result.low_confidence,
                 "destination": str(final_path),
+                # meta fields for catalogue
+                "format": meta.format,
+                "codec": meta.codec,
+                "duration_s": meta.duration_s,
+                "sample_rate": meta.sample_rate,
+                "bit_depth": meta.bit_depth,
+                "channels": meta.channels,
+                "file_size": meta.file_size,
+                # enrichment fields for catalogue
+                "description": result.description,
+                "tags": result.tags,
+                "mood": result.mood,
+                "energy": result.energy,
+                "bpm": result.bpm,
+                "key": result.key,
             })
         except Exception as exc:
             log.error(f"Routing/delivery failed for {staging_path.name}: {exc}")
             ingest_log.write(staging_path.name, h, adapter_name, "route_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── P6: catalogue (not yet implemented) ───────────────────────────────────
-    if delivered:
-        log.info(f"{len(delivered)} file(s) delivered — catalogue not yet implemented (Phase 6)")
+    # ── 10: catalogue upsert ─────────────────────────────────────────────────
+    for rec in delivered:
+        try:
+            catalogue.upsert_file(
+                hash=rec["hash"],
+                filename=rec["filename"],
+                source_adapter=rec["source"],
+                library_path=rec["destination"],
+                format=rec.get("format", ""),
+                codec=rec.get("codec", ""),
+                duration_s=rec.get("duration_s", 0.0),
+                sample_rate=rec.get("sample_rate", 0),
+                bit_depth=rec.get("bit_depth"),
+                channels=rec.get("channels", 0),
+                file_size=rec.get("file_size", 0),
+            )
+            catalogue.upsert_enrichment(
+                hash=rec["hash"],
+                category=rec["category"],
+                subcategory=rec["subcategory"],
+                cat_id=rec["cat_id"],
+                description=rec.get("description", ""),
+                tags=rec.get("tags", []),
+                mood=rec.get("mood", ""),
+                energy=rec.get("energy", ""),
+                bpm=rec.get("bpm"),
+                key=rec.get("key"),
+                confidence=rec["confidence"],
+                low_confidence=rec["low_confidence"],
+            )
+            catalogue.log_event(
+                rec["filename"], rec["hash"], rec["source"], "delivered",
+                destination=rec["destination"],
+                cat_id=rec["cat_id"],
+            )
+        except Exception as exc:
+            log.error(f"Catalogue upsert failed for {rec['filename']}: {exc}")
+
+    catalogue.close()
 
     summary_records = delivered
     _write_summary(cfg, start, dry_run, summary_records, errors, active)

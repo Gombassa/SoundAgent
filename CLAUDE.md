@@ -18,7 +18,9 @@ pip install -r requirements.txt
 
 python -m soundagent tick                         # run one agent tick
 python -m soundagent tick --dry-run              # log intended actions, no filesystem writes
-python -m soundagent query --tag rain            # CLI catalogue search
+python -m soundagent query rain water            # FTS search (description + tags)
+python -m soundagent query --category field --min-duration 30  # filtered search
+python -m soundagent query --json                # raw JSON output
 python -m soundagent init                        # create folder hierarchy from config
 
 pytest                                           # run all tests
@@ -94,7 +96,7 @@ Two-layer config: YAML file (sources, paths, intervals) overridden by environmen
 
 ### SQLite catalogue (Phase 6)
 
-Primary key is SHA-256 hash. Key tables: `files`, `tags`, `enrichment`, `ingest_log`, `source_log`, `errors`. FTS5 index on `description + tags` for full-text search. Migrations managed by Alembic.
+`soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`. FTS5 virtual table `fts_search` indexes `description + tags`; kept in sync via INSERT/UPDATE/DELETE triggers. `Catalogue.is_known(hash)` drives cross-tick dedup in `tick.py`. `open_catalogue(library_root)` is the public entry point.
 
 ## Key dependencies
 

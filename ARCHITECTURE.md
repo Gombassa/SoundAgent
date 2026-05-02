@@ -21,6 +21,7 @@ soundagent/
 ├── ucs.py             EnrichmentResult → UCSFields mapper (CatID, FXName, etc.)
 ├── embed.py           Metadata embedding: iXML/BWF · ID3 · FLAC · AIFF · XMP sidecar
 ├── router.py          Routing rules engine + atomic deliver() + sidecar override
+├── catalogue.py       SQLite catalogue: schema, upsert, FTS5 queries, cross-tick dedup
 ├── webdav_server.py   wsgidav server start/stop/status via subprocess + PID file
 └── adapters/
     ├── __init__.py    get_adapter() factory
@@ -87,7 +88,8 @@ class Config:
 |---|---|---|
 | `init` | | Creates library folder hierarchy |
 | `tick` | `--dry-run` | Runs one agent tick; exits 0 (clean) or 1 (partial failure) |
-| `query` | `--tag` `--category` | Not yet implemented (P6) |
+| `query` | `[TERM…]` `--category` `--subcategory` `--source` `--min-duration` `--max-duration` `--min-bpm` `--max-bpm` `--limit` `--json` | Search the SQLite catalogue |
+| `webdav start\|stop\|status` | | WebDAV server lifecycle |
 
 Config is loaded and logging is set up before dispatch to any command. Config errors exit with code 2.
 
@@ -169,14 +171,14 @@ class AudioMetadata:
 |---|---|---|
 | Health check | Check each enabled source adapter | **Done (P2)** |
 | Scan | Adapters deliver files to `_inbox/` | **Done (P2)** |
-| Dedup | SHA-256 within-tick; catalogue dedup in P6 | **Partial (P2)** |
+| Dedup | SHA-256 within-tick + `catalogue.is_known()` cross-tick | **Done (P6)** |
 | Validate | Extension/format allowlist → `_errors/` | **Done (P2)** |
 | Stage | Atomic copy to `_staging/` + ffprobe | **Done (P2)** |
 | Enrich | Claude API → structured JSON | **Done (P3)** |
 | Embed | iXML/BWF · ID3 · XMP sidecar | **Done (P4)** |
 | Route | Rules engine → target path | **Done (P5)** |
 | Deliver | Atomic move → basehead_import_path | **Done (P5)** |
-| Catalogue | SQLite upsert + FTS5 index | P6 |
+| Catalogue | SQLite upsert + FTS5 index | **Done (P6)** |
 | Report | summary.json + ingest.log (JSONL) | **Done (P2)** |
 
 ---
@@ -247,15 +249,52 @@ Flow: cache lookup → Claude API call → JSON parse → validate → cache wri
 | `confidence` | float | 0.0–1.0 |
 | `low_confidence` | bool | True when confidence < 0.70 |
 
+## SQLite Catalogue (P6)
+
+**File:** `soundagent/catalogue.py`  
+**Database:** `<library_root>/soundlibrary.db` (WAL mode, FK enforcement)
+
+`open_catalogue(library_root) -> Catalogue` is the entry point. Schema is applied idempotently via `executescript` on first connect.
+
+**Schema:**
+
+| Table | Key | Purpose |
+|---|---|---|
+| `files` | `hash TEXT PK` | One row per unique file — technical + routing metadata |
+| `enrichment` | `hash FK` | Claude enrichment result for each file |
+| `ingest_log` | `id AUTOINCREMENT` | Structured append-only event log |
+| `fts_search` | FTS5 virtual | Content-indexed over `enrichment(description, tags)` |
+
+FTS triggers keep `fts_search` in sync with `enrichment` on INSERT/UPDATE/DELETE.
+
+**Key methods:**
+
+| Method | Notes |
+|---|---|
+| `is_known(hash)` | `True` if file has been fully delivered (`library_path IS NOT NULL`) |
+| `upsert_file(...)` | ON CONFLICT: updates `last_seen`, preserves existing `library_path` via COALESCE |
+| `upsert_enrichment(...)` | Tags stored as JSON array; ON CONFLICT replaces all fields |
+| `log_event(filename, hash, source, status, **detail)` | `detail` serialised as JSON blob |
+| `search(query, category, …)` | FTS5 MATCH when `query` given; plain SQL filters otherwise |
+| `integrity_check()` | Runs `PRAGMA integrity_check`; logs error and returns False on failure |
+
+**Tick integration** (`tick.py`):
+- `integrity_check()` runs at tick start; warning logged on failure (does not abort tick)
+- `is_known(hash)` in dedup step replaces within-tick-only dedup — already-processed files are skipped immediately and logged as `skipped_known`
+- After successful delivery: `upsert_file()` + `upsert_enrichment()` + `log_event("delivered")`
+
+**CLI query command:**
+```
+python -m soundagent query [TERM…] [--category CAT] [--subcategory SUB]
+    [--source ADAPTER] [--min-duration S] [--max-duration S]
+    [--min-bpm BPM] [--max-bpm BPM] [--limit N] [--json]
+```
+Positional terms → FTS MATCH against description+tags. `--json` outputs raw JSON.
+
 ## Planned modules (not yet built)
 
 | Module | Phase | Purpose |
 |---|---|---|
-| ~~`soundagent/enrichment.py`~~ | ~~P3~~ | Done |
-| ~~`soundagent/embed.py`~~ | ~~P4~~ | Done |
-| ~~`soundagent/ucs.py`~~ | ~~P4~~ | Done |
-| ~~`soundagent/router.py`~~ | ~~P5~~ | Done |
-| `soundagent/catalogue.py` | P6 | SQLite schema, upsert, FTS5 queries |
 | `soundagent/api.py` | P8 | FastAPI search server |
 
 ---

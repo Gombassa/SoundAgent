@@ -22,9 +22,19 @@ def main() -> None:
     webdav_sub.add_parser("status", help="Show WebDAV server status")
     webdav_sub.add_parser("_serve", help=argparse.SUPPRESS)   # internal — called by start
 
-    query_cmd = sub.add_parser("query", help="Search the catalogue (Phase 6)")
-    query_cmd.add_argument("--tag")
-    query_cmd.add_argument("--category")
+    query_cmd = sub.add_parser("query", help="Search the sound catalogue")
+    query_cmd.add_argument("terms", nargs="*", metavar="TERM",
+                           help="Full-text search terms (description / tags)")
+    query_cmd.add_argument("--category", metavar="CAT")
+    query_cmd.add_argument("--subcategory", metavar="SUB")
+    query_cmd.add_argument("--source", metavar="ADAPTER")
+    query_cmd.add_argument("--min-duration", type=float, metavar="S")
+    query_cmd.add_argument("--max-duration", type=float, metavar="S")
+    query_cmd.add_argument("--min-bpm", type=float, metavar="BPM")
+    query_cmd.add_argument("--max-bpm", type=float, metavar="BPM")
+    query_cmd.add_argument("--limit", type=int, default=50, metavar="N")
+    query_cmd.add_argument("--json", action="store_true", dest="as_json",
+                           help="Output raw JSON")
 
     args = parser.parse_args()
 
@@ -57,8 +67,40 @@ def main() -> None:
             webdav_server.serve(cfg)
 
     elif args.command == "query":
-        print("Query interface not yet implemented (Phase 6)", file=sys.stderr)
-        sys.exit(1)
+        from soundagent.catalogue import open_catalogue
+        cat = open_catalogue(cfg.library_root)
+        fts_query = " ".join(args.terms) if args.terms else None
+        results = cat.search(
+            query=fts_query,
+            category=args.category,
+            subcategory=args.subcategory,
+            source=args.source,
+            min_duration=args.min_duration,
+            max_duration=args.max_duration,
+            min_bpm=args.min_bpm,
+            max_bpm=args.max_bpm,
+            limit=args.limit,
+        )
+        cat.close()
+
+        if args.as_json:
+            import json as _json
+            print(_json.dumps(results, indent=2))
+        else:
+            if not results:
+                print("No results.")
+                sys.exit(0)
+            for r in results:
+                tags = ", ".join(r.get("tags") or [])
+                bpm = f"  {r['bpm']:.0f}bpm" if r.get("bpm") else ""
+                dur = f"  {r['duration_s']:.1f}s" if r.get("duration_s") else ""
+                print(
+                    f"{r['filename']}"
+                    f"  [{r.get('cat_id') or r.get('category', '?')}]{bpm}{dur}"
+                    f"  {r.get('description', '')}"
+                )
+                if tags:
+                    print(f"    tags: {tags}")
 
 
 if __name__ == "__main__":
