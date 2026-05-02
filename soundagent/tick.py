@@ -288,8 +288,9 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
 
 def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, errors: list, active: list) -> None:
     import time as _t
+    elapsed = round(_t.monotonic() - start, 2)
     summary = {
-        "duration_s": round(_t.monotonic() - start, 2),
+        "duration_s": elapsed,
         "dry_run": dry_run,
         "sources": [s.name for s in active],
         "staged": len(staged),
@@ -297,3 +298,25 @@ def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, error
     }
     if not dry_run and cfg.library_root.exists():
         (cfg.library_root / "summary.json").write_text(json.dumps(summary, indent=2))
+
+    # Print a clean stdout report for Cowork / log capture
+    mode = " [DRY RUN]" if dry_run else ""
+    print(f"\n=== SoundAgent Tick Report{mode} ===")
+    print(f"Duration : {elapsed}s")
+    print(f"Sources  : {', '.join(s.name for s in active) or 'none'}")
+    print(f"Delivered: {len(staged)} file(s)")
+    if errors:
+        print(f"Errors   : {len(errors)} file(s)")
+        for e in errors:
+            print(f"  - {e}")
+    else:
+        print("Errors   : none")
+
+    if not dry_run and staged:
+        print("\nDelivered files:")
+        for rec in staged:
+            cat = rec.get("cat_id") or rec.get("category", "?")
+            conf = rec.get("confidence", 0)
+            flag = " [LOW CONFIDENCE]" if rec.get("low_confidence") else ""
+            print(f"  {rec['filename']}  [{cat}]  confidence={conf:.2f}{flag}")
+    print("=================================\n")
