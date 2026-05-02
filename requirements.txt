@@ -1,0 +1,11 @@
+anthropic
+pyyaml
+watchdog
+ffmpeg-python
+mutagen
+wsgidav
+aiofiles
+tenacity
+fastapi
+uvicorn[standard]
+alembic

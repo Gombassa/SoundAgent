@@ -1,0 +1,31 @@
+library_root: C:\Users\robin\SoundLibrary
+basehead_import_path: C:\Users\robin\SoundLibrary\_basehead_import
+tick_interval: 300        # seconds — used by Cowork to schedule the next tick
+log_level: INFO
+
+sources:
+  - name: local-inbox
+    type: local
+    path: C:\Users\robin\SoundLibrary\_inbox
+    enabled: true
+
+  - name: nas-inbox
+    type: network
+    path: \\NAS\soundlibrary\inbox
+    enabled: false
+
+  - name: cloud-s3
+    type: rclone
+    remote: myremote           # name of configured rclone remote
+    remote_path: /inbox
+    mode: sync                 # sync | mount
+    interval: 60               # seconds between syncs (sync mode only)
+    enabled: false
+
+  - name: mobile-webdav
+    type: webdav
+    port: 8080
+    auth: true
+    username: soundagent
+    # password loaded from SOUNDAGENT_WEBDAV_PASSWORD env var
+    enabled: false
