@@ -87,9 +87,13 @@ def deliver(
     tmp.rename(lib_dest)
     staging_path.unlink(missing_ok=True)
 
-    # Copy to Basehead import folder so Basehead picks it up on its next scan
-    bh_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(lib_dest, bh_dest)
+    # Copy to Basehead import folder only when it differs from the library root.
+    # When basehead_import_path == library_root, Basehead sees the organised file
+    # directly on its next "Scan for New Files" — no extra copy needed.
+    if bh_dest.parent.resolve() != lib_dest.parent.resolve():
+        bh_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(lib_dest, bh_dest)
+        log.debug(f"Basehead copy → {bh_dest.name}")
 
     try:
         rel = lib_dest.relative_to(lib_dest.parents[1])

@@ -1,31 +1,61 @@
-library_root: C:\Users\robin\SoundLibrary
-basehead_import_path: C:\Users\robin\SoundLibrary\_basehead_import
+# SoundAgent configuration
+# Copy this file to config.yaml and fill in your values.
+
+library_root: D:\SoundAgent
+basehead_import_path: D:\SoundAgent   # Basehead watches this whole folder tree;
+                                       # set to a different path if you want a
+                                       # separate Basehead hot-drop folder
+
 tick_interval: 300        # seconds — used by Cowork to schedule the next tick
 log_level: INFO
 
 sources:
-  - name: local-inbox
+
+  # ── Local / existing libraries ──────────────────────────────────────────────
+  - name: field-recordings-d
     type: local
-    path: C:\Users\robin\SoundLibrary\_inbox
+    path: D:\Field Recordings
     enabled: true
 
-  - name: nas-inbox
-    type: network
-    path: \\NAS\soundlibrary\inbox
+  - name: field-recordings-c
+    type: local
+    path: C:\Users\robin\Music\Field Recordings
+    enabled: true
+
+  # ── Google Drive (via Google Drive for Desktop — mounts as G:\) ─────────────
+  # Navigate to G:\My Drive\ in Explorer to find the actual folder names.
+  # The IDs below are Google folder IDs visible in the Drive web URL.
+  - name: gdrive-library-1
+    type: local
+    path: G:\My Drive\[folder 19-cOnGUNtFe1yK4f-U9EO-QjawmJbBvX]
+    enabled: false   # update path to actual folder name after mounting
+
+  - name: gdrive-library-2
+    type: local
+    path: G:\My Drive\[folder 1H6_kxiak8lsfpEPFnW707m2s9RVB0dyn]
     enabled: false
 
-  - name: cloud-s3
+  - name: gdrive-library-3
+    type: local
+    path: G:\My Drive\[folder 166AQqgU2-EC3Ww9gud0u_U0d8CYFvZru]
+    enabled: false
+
+  # ── rclone (alternative Google Drive — also works for any cloud provider) ───
+  - name: gdrive-rclone
     type: rclone
-    remote: myremote           # name of configured rclone remote
-    remote_path: /inbox
-    mode: sync                 # sync | mount
-    interval: 60               # seconds between syncs (sync mode only)
+    remote: gdrive             # name of your configured rclone remote
+    remote_path: /
+    mode: sync
+    interval: 60
     enabled: false
 
+  # ── Mobile ingest via WebDAV ─────────────────────────────────────────────────
+  # Start with: python -m soundagent webdav start
+  # iOS: Files → Browse → ··· → Connect to Server → http://<machine-ip>:8080
   - name: mobile-webdav
     type: webdav
     port: 8080
     auth: true
     username: soundagent
-    # password loaded from SOUNDAGENT_WEBDAV_PASSWORD env var
+    # password: set SOUNDAGENT_WEBDAV_PASSWORD env var
     enabled: false
