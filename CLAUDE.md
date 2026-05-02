@@ -4,23 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-SoundAgent is a tick-based Python agent that ingests audio files from multiple sources, enriches them via the Claude API, embeds standardised metadata, routes them into a structured library, and delivers them to Basehead Ultra for search and spotting.
+SoundAgent is a tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them via the Claude API, embeds standardised metadata, routes them into a structured library, and delivers them to Basehead Ultra for search and spotting.
 
-**Status:** Pre-implementation. The plan is in `soundagent-plan.jsx` (React UI for the build plan). The Python codebase is being built from scratch.
+**Status:** P1–P6 complete and committed. Audio analysis integration (new ML pipeline stage before Claude enrichment) is the current work.
 
 ## Commands
-
-Once the Python package is in place, standard commands will be:
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate   # create env (Windows)
 pip install -r requirements.txt
+scripts\install_audio_deps.bat                   # install ML model dependencies
 
 python -m soundagent tick                         # run one agent tick
 python -m soundagent tick --dry-run              # log intended actions, no filesystem writes
 python -m soundagent query rain water            # FTS search (description + tags)
 python -m soundagent query --category field --min-duration 30  # filtered search
-python -m soundagent query --json                # raw JSON output
+python -m soundagent query --content-type music --confidence-min 0.8
+python -m soundagent query --language en --json  # raw JSON output
 python -m soundagent init                        # create folder hierarchy from config
 
 pytest                                           # run all tests
@@ -35,20 +35,41 @@ uvicorn soundagent.api:app --reload             # Phase 8 search UI dev server
 Every tick runs this sequence in order. Each step is independent and can fail gracefully without aborting the whole tick:
 
 ```
-TICK START   → Cowork fires agent process
-1 HEALTH     → Check each source adapter; skip unavailable, log warning
-2 SCAN       → All active adapters deliver files to /_inbox/
-3 DEDUP      → SHA-256 hash → check SQLite → skip known files
-4 VALIDATE   → Extension/format allowlist → reject to /_errors/
-5 STAGE      → Atomic copy to /_staging/ + ffprobe technical metadata
-6 ENRICH     → Claude API: category, subcategory, tags, description, mood, BPM/key
-7 EMBED      → Write iXML/BWF (WAV) · ID3 (MP3) · XMP sidecar
-8 ROUTE      → Rules engine: enriched metadata → target library path
-9 DELIVER    → Atomic move → Basehead import folder, fully tagged
-10 CATALOGUE → SQLite upsert + FTS5 index update
-11 REPORT    → Tick summary → Cowork log + summary.json
-TICK END     → Exit 0 (clean) or exit 1 (partial failure)
+TICK START        → Cowork fires agent process
+1  HEALTH         → Check each source adapter; skip unavailable, log warning
+2  SCAN           → All active adapters deliver files to /_inbox/
+3  DEDUP          → SHA-256 hash → check SQLite → skip known files
+4  VALIDATE       → Extension/format allowlist → reject to /_errors/
+5  STAGE          → Atomic copy to /_staging/ + ffprobe technical metadata
+6  AUDIO ANALYSIS → YAMNet + AudioCLIP always; Whisper if speech; Essentia if music
+7  ENRICH         → Claude API synthesises analysis results into professional metadata
+8  EMBED          → Write iXML/BWF (WAV) · ID3 (MP3) · XMP sidecar
+9  ROUTE          → Rules engine: enriched metadata → target library path
+10 DELIVER        → Atomic move → Basehead import folder, fully tagged
+11 CATALOGUE      → SQLite upsert + FTS5 index update
+12 REPORT         → Tick summary → Cowork log + summary.json
+TICK END          → Exit 0 (clean) or exit 1 (partial failure)
 ```
+
+If all audio analysis models fail or `audio_analysis.enabled: false` → step 6 produces a fallback result → Claude enrichment runs on filename + ffprobe only (identical to pre-integration behaviour). The pipeline never stalls due to model failures.
+
+### Audio analysis package (`soundagent/audio_analysis/`)
+
+| Module | Role |
+|---|---|
+| `result.py` | `AnalysisResult` dataclass + `AnalysisResult.fallback()` factory |
+| `preprocessor.py` | ffmpeg-based conversion (16kHz + 44kHz WAV), waveform loading, truncation |
+| `yamnet_analyzer.py` | YAMNet (TF Hub) — sound event detection, content-type routing |
+| `whisper_analyzer.py` | Whisper — transcription + language detection (speech files only) |
+| `audioclip_analyzer.py` | AudioCLIP — zero-shot semantic tagging against text prompts |
+| `essentia_analyzer.py` | Essentia MusicExtractor — BPM, key, mood, genre (music files only) |
+| `pipeline.py` | Orchestrator: runs all models, catches failures, returns AnalysisResult |
+
+All ML imports (`tensorflow`, `whisper`, `torch`, `AudioCLIP`, `essentia`) are **inside function bodies** — missing libraries log a warning and the model is skipped; they never crash the agent.
+
+Content-type routing from YAMNet determines which specialist models run: `"speech"` → Whisper; `"music"` → Essentia. AudioCLIP always runs (if weights available). Files longer than `max_analysis_duration_s` (default 120s): YAMNet/AudioCLIP run on first 60s; Whisper/Essentia skip.
+
+AudioCLIP weights must be downloaded manually to `models/audioclip/AudioCLIP.pt` (see README.md). The `models/` directory is gitignored; `models/.gitkeep` keeps the directory in the repo.
 
 ### Source adapters (all converge on `/_inbox/`)
 
@@ -67,7 +88,7 @@ The adapter base class provides a common interface; the agent is source-agnostic
 /SoundLibrary/
 ├─ _inbox/          ← all adapters deliver here
 ├─ _staging/        ← atomic copy during processing
-├─ field/nature/  sfx/impacts/  music/loops/  broadcast/idents/  (etc.)
+├─ field/nature/  sfx/impacts/  music/loops/  broadcast/idents/  voice/dialogue/  (etc.)
 ├─ unclassified/    ← low-confidence enrichment fallback
 ├─ _errors/         ← format/hash failures, quarantined with source annotation
 ├─ archive/
@@ -80,12 +101,31 @@ The adapter base class provides a common interface; the agent is source-agnostic
 
 Two-layer config: YAML file (sources, paths, intervals) overridden by environment variables (API keys, adapter flags). The YAML `sources` block is a named list of adapter entries; each has `type: local|network|rclone|webdav` plus type-specific fields.
 
-### Claude enrichment (Phase 3)
+Key `audio_analysis` config block:
 
-- Model: `claude-sonnet-4` (current plan notation; use latest Sonnet)
-- Output: structured JSON — category, subcategory, description, tags, mood, energy, BPM/key (music only)
-- Enrichment is cached by SHA-256 hash to avoid reprocessing unchanged files
-- Confidence threshold: files below threshold route to `/unclassified/` rather than failing
+```yaml
+audio_analysis:
+  enabled: true
+  audioclip_weights_path: models/audioclip/AudioCLIP.pt
+  whisper_model_size: base          # tiny | base | small | medium | large
+  yamnet_cache_dir: .cache/yamnet
+  yamnet_top_n: 10
+  yamnet_min_score: 0.05
+  audioclip_min_score: 0.2
+  speech_threshold: 0.2             # YAMNet speech score to trigger Whisper
+  music_threshold: 0.3              # YAMNet music score to trigger Essentia
+  max_analysis_duration_s: 120
+  run_on_existing: false            # re-analyse catalogued files lacking analysis data
+```
+
+### Claude enrichment (Phase 3 — updated)
+
+- Model: `claude-sonnet-4-6`
+- Claude's role is now **synthesis**, not inference: receives `AnalysisResult` alongside ffprobe metadata
+- New output schema: `category`, `subcategory`, `description`, `tags` (max 12), `mood`, `energy`, `usage_suggestions` (1–3 contexts), `bpm`, `musical_key`, `language`, `enrichment_confidence`, `notes`
+- Expanded categories: `field | sfx | music | broadcast | voice | ambience`
+- Confidence scoring: analysis ran + clear detections → 0.75–0.95; fallback only + poor filename → 0.1–0.35
+- Enrichment cache: keyed on SHA-256; `run_on_existing=True` re-enriches files lacking analysis data
 
 ### Metadata embedding (Phase 4)
 
@@ -94,26 +134,44 @@ Two-layer config: YAML file (sources, paths, intervals) overridden by environmen
 - Other formats: XMP sidecar file
 - UCS field mapper converts enrichment output to UCS-compatible layout for Basehead import
 
-### SQLite catalogue (Phase 6)
+### SQLite catalogue (Phase 6 — updated)
 
-`soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`. FTS5 virtual table `fts_search` indexes `description + tags`; kept in sync via INSERT/UPDATE/DELETE triggers. `Catalogue.is_known(hash)` drives cross-tick dedup in `tick.py`. `open_catalogue(library_root)` is the public entry point.
+`soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`. FTS5 virtual table `fts_search` indexes `description + tags + usage_suggestions + notes`; kept in sync via triggers. `_migrate()` in `Catalogue._init_schema()` handles schema evolution via `ALTER TABLE` for new columns + FTS5 rebuild. `open_catalogue(library_root)` is the public entry point.
+
+New enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, `whisper_summary`, `whisper_language`, `essentia_bpm`, `essentia_key`, `essentia_mood`, `essentia_genre`, `models_run`, `models_failed`, `analysis_duration_s`, `usage_suggestions`, `notes`.
 
 ## Key dependencies
 
-**Python packages:** `anthropic`, `pyyaml`, `watchdog`, `ffmpeg-python`, `mutagen`, `wsgidav`, `aiofiles`, `tenacity`, `fastapi`, `uvicorn`, `alembic`
+**Core Python packages:** `anthropic`, `pyyaml`, `watchdog`, `ffmpeg-python`, `mutagen`, `wsgidav`, `aiofiles`, `tenacity`, `fastapi`, `uvicorn`
+
+**Audio analysis (optional — graceful skip if missing):**
+- `tensorflow>=2.13`, `tensorflow-hub>=0.14` — YAMNet
+- `openai-whisper` — speech transcription
+- `torch>=2.0`, `torchaudio>=2.0` — AudioCLIP inference
+- `AudioCLIP` — source install required (see README.md)
+- `essentia` — music analysis (Linux/macOS; skip gracefully on Windows)
+- `soundfile>=0.12`, `scipy>=1.11` — WAV loading
 
 **External tools (must be on PATH):**
-- `ffprobe` (FFmpeg) — audio technical metadata extraction
+- `ffprobe` (FFmpeg) — audio technical metadata extraction and audio conversion for ML models
 - `rclone` — cloud sync/mount (required only if rclone adapter is configured)
 - `WinFsp` — FUSE layer for rclone mount mode on Windows
 - `bwfmetaedit` — BWF iXML write and validation
 
 **Front-end:** Basehead Ultra (external application); agent delivers files to Basehead's configured import/watch folder.
 
+**Model weights (not in repo):**
+- AudioCLIP: `models/audioclip/AudioCLIP.pt` — manual download (~800MB, see README.md)
+- YAMNet: auto-downloads to `.cache/yamnet/` on first run (~25MB)
+- Whisper base: auto-downloads on first run (~145MB)
+
 ## Important constraints
 
+- All ML library imports (`tensorflow`, `whisper`, `torch`, `AudioCLIP`, `essentia`) must be inside function bodies — never at module level. Missing libraries log once and the model skips cleanly.
 - Rclone mount mode requires WinFsp on Windows — document this dependency prominently for users.
 - WebDAV server lifecycle must be tied to the agent process (clean start/stop with tick).
 - Network/cloud adapters must fail gracefully (skip + retry queue) — never block the tick.
 - iXML spec has edge cases with non-ASCII characters; test with multilingual filenames early.
 - Basehead's iXML import field mapping is undocumented — requires empirical validation against a live Basehead instance.
+- Model weights must never be committed: `models/**` is gitignored; `models/.gitkeep` keeps the directory.
+- essentia is Linux/macOS only — Windows users get graceful skip, not an error.
