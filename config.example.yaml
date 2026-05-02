@@ -1,8 +1,8 @@
 # SoundAgent configuration
 # Copy this file to config.yaml and fill in your values.
 
-library_root: D:\Sound Library
-basehead_import_path: D:\Sound Library   # Basehead watches this whole folder tree
+library_root: D:\SoundLibrary
+basehead_import_path: D:\SoundLibrary   # Basehead watches this whole folder tree
 
 tick_interval: 300        # seconds — used by Cowork to schedule the next tick
 log_level: INFO
