@@ -23,21 +23,14 @@ sources:
     enabled: true
 
   # ── Google Drive (via Google Drive for Desktop — mounts as G:\) ─────────────
-  # Navigate to G:\My Drive\ in Explorer to find the actual folder names.
-  # The IDs below are Google folder IDs visible in the Drive web URL.
-  - name: gdrive-library-1
+  - name: gdrive-field-recordings
     type: local
-    path: G:\My Drive\[folder 19-cOnGUNtFe1yK4f-U9EO-QjawmJbBvX]
-    enabled: false   # update path to actual folder name after mounting
-
-  - name: gdrive-library-2
-    type: local
-    path: G:\My Drive\[folder 1H6_kxiak8lsfpEPFnW707m2s9RVB0dyn]
+    path: G:\My Drive\Field recordings
     enabled: false
 
-  - name: gdrive-library-3
+  - name: gdrive-to-sort
     type: local
-    path: G:\My Drive\[folder 166AQqgU2-EC3Ww9gud0u_U0d8CYFvZru]
+    path: G:\My Drive\To sort
     enabled: false
 
   # ── rclone (alternative Google Drive — also works for any cloud provider) ───

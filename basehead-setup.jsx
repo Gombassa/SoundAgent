@@ -62,11 +62,10 @@ const STEPS = [
           "Basehead treats them as local folders from here",
         ],
         paths: [
-          "G:\\My Drive\\[folder matching] 19-cOnGUNtFe1yK4f-U9EO-QjawmJbBvX",
-          "G:\\My Drive\\[folder matching] 1H6_kxiak8lsfpEPFnW707m2s9RVB0dyn",
-          "G:\\My Drive\\[folder matching] 166AQqgU2-EC3Ww9gud0u_U0d8CYFvZru",
+          "G:\\My Drive\\Field recordings",
+          "G:\\My Drive\\To sort",
         ],
-        note: "Navigate to the mounted drive in Explorer to find the actual folder names — the IDs above are the Google folder IDs, not visible names.",
+        note: "Both folders confirmed on your G: drive. Add each as a separate Import in Basehead so you can filter or colour-code them independently.",
       },
       {
         label: "Option B — rclone mount (for SoundAgent integration later)",
