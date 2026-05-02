@@ -175,3 +175,9 @@ New enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matche
 - Basehead's iXML import field mapping is undocumented — requires empirical validation against a live Basehead instance.
 - Model weights must never be committed: `models/**` is gitignored; `models/.gitkeep` keeps the directory.
 - essentia is Linux/macOS only — Windows users get graceful skip, not an error.
+
+## Gotchas
+
+- **`New-Item -ItemType Directory` on a dotfile path creates a directory, not a file.** Running `New-Item -ItemType Directory -Path "models\.gitkeep"` silently creates a *directory* named `.gitkeep`. Subsequent attempts to write a file at that path get "Access is denied". Fix: `Remove-Item -Recurse -Force` the directory first, then `Set-Content` to create the file.
+- **Starlette 1.0.0 changed `TemplateResponse` — `request` is now the first positional arg, not inside the context dict.** Call as `templates.TemplateResponse(request, "name.html", {"key": val})`. The old form `templates.TemplateResponse("name.html", {"request": request, ...})` passes the context dict as `name`, causing a Jinja2 `TypeError` on Python 3.14.
+- **`unittest.mock.patch` requires the target to be a module-level attribute.** Patching `module.attr` raises `AttributeError` if `attr` was imported inside a function body. For `audio_analysis/pipeline.py`: sub-module imports (`preprocessor`, `yamnet_analyzer`, etc.) are at module level so they can be patched in tests; ML library imports (`tensorflow`, `torch`, `whisper`, `essentia`) stay inside function bodies to avoid `ImportError` when libraries aren't installed.

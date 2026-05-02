@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundAgent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <style>
+    tr[data-hash].selected { background-color: #eff6ff; }
+    tr[data-hash].selected td:first-child { border-left: 3px solid #3b82f6; padding-left: 9px; }
+    .htmx-indicator { opacity: 0; transition: opacity 200ms; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+    .htmx-request.htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 text-sm min-h-screen">
+
+<!-- Header -->
+<header class="bg-white border-b px-5 py-2.5 flex items-center gap-3 sticky top-0 z-20 shadow-sm">
+  <span class="font-bold text-gray-800 tracking-tight">SoundAgent</span>
+  <span class="text-gray-300">|</span>
+  <span class="text-gray-400 text-xs tabular-nums">{{ total }} file{{ 's' if total != 1 else '' }}</span>
+
+  <div class="flex-1 max-w-xl">
+    <input id="q" name="q" type="search"
+      placeholder="Search descriptions, tags, filenames…"
+      autocomplete="off"
+      class="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm
+             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent
+             bg-gray-50"
+      hx-get="/search"
+      hx-trigger="input changed delay:300ms, search"
+      hx-target="#results-container"
+      hx-include="#search-filters"
+      hx-indicator="#spinner">
+  </div>
+
+  <span id="spinner" class="htmx-indicator text-gray-400 text-xs">searching…</span>
+
+  <a id="csv-link" href="/export.csv"
+     class="text-xs text-blue-600 hover:text-blue-800 hover:underline ml-auto shrink-0">
+    Export CSV
+  </a>
+</header>
+
+<!-- Filters -->
+<div id="search-filters" class="bg-white border-b px-5 py-2 flex flex-wrap gap-x-4 gap-y-2 items-center text-xs">
+
+  <select name="category"
+    class="border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+    hx-get="/search" hx-trigger="change" hx-target="#results-container"
+    hx-include="#search-filters,#q">
+    <option value="">All categories</option>
+    {% for c in categories %}
+    <option value="{{ c }}">{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <select name="content_type"
+    class="border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+    hx-get="/search" hx-trigger="change" hx-target="#results-container"
+    hx-include="#search-filters,#q">
+    <option value="">All content types</option>
+    {% for ct in content_types %}
+    <option value="{{ ct }}">{{ ct }}</option>
+    {% endfor %}
+  </select>
+
+  <select name="source"
+    class="border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+    hx-get="/search" hx-trigger="change" hx-target="#results-container"
+    hx-include="#search-filters,#q">
+    <option value="">All sources</option>
+    {% for s in sources %}
+    <option value="{{ s }}">{{ s }}</option>
+    {% endfor %}
+  </select>
+
+  <span class="text-gray-300">|</span>
+
+  <label class="flex items-center gap-1 text-gray-500">
+    Dur (s)
+    <input type="number" name="min_duration" min="0" step="1" placeholder="min"
+      class="border border-gray-200 rounded px-2 py-1 w-14 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+      hx-get="/search" hx-trigger="change" hx-target="#results-container"
+      hx-include="#search-filters,#q">
+    –
+    <input type="number" name="max_duration" min="0" step="1" placeholder="max"
+      class="border border-gray-200 rounded px-2 py-1 w-14 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+      hx-get="/search" hx-trigger="change" hx-target="#results-container"
+      hx-include="#search-filters,#q">
+  </label>
+
+  <label class="flex items-center gap-1 text-gray-500">
+    BPM
+    <input type="number" name="min_bpm" min="0" step="1" placeholder="min"
+      class="border border-gray-200 rounded px-2 py-1 w-14 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+      hx-get="/search" hx-trigger="change" hx-target="#results-container"
+      hx-include="#search-filters,#q">
+    –
+    <input type="number" name="max_bpm" min="0" step="1" placeholder="max"
+      class="border border-gray-200 rounded px-2 py-1 w-14 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+      hx-get="/search" hx-trigger="change" hx-target="#results-container"
+      hx-include="#search-filters,#q">
+  </label>
+
+  <label class="flex items-center gap-1 text-gray-500">
+    Confidence ≥
+    <input type="number" name="min_confidence" min="0" max="1" step="0.05" placeholder="0.0"
+      class="border border-gray-200 rounded px-2 py-1 w-14 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+      hx-get="/search" hx-trigger="change" hx-target="#results-container"
+      hx-include="#search-filters,#q">
+  </label>
+
+</div>
+
+<!-- Main -->
+<main class="px-5 py-4">
+  <div id="results-container"
+       hx-get="/search" hx-trigger="load" hx-target="this">
+    <p class="text-gray-400 text-xs py-4">Loading…</p>
+  </div>
+</main>
+
+<script>
+  // Keep Export CSV link in sync with active filters
+  document.body.addEventListener('htmx:afterRequest', function (e) {
+    if (!e.detail.pathInfo.requestPath.startsWith('/search')) return;
+    const params = new URLSearchParams();
+    const q = document.getElementById('q').value;
+    if (q) params.set('q', q);
+    document.querySelectorAll('#search-filters [name]').forEach(el => {
+      if (el.value) params.set(el.name, el.value);
+    });
+    const link = document.getElementById('csv-link');
+    link.href = '/export.csv' + (params.toString() ? '?' + params.toString() : '');
+  });
+
+  // Highlight clicked row
+  document.body.addEventListener('click', function (e) {
+    const tr = e.target.closest('tr[data-hash]');
+    if (!tr) return;
+    document.querySelectorAll('tr[data-hash]').forEach(r => r.classList.remove('selected'));
+    tr.classList.add('selected');
+  });
+</script>
+
+</body>
+</html>

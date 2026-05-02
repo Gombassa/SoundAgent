@@ -1,0 +1,223 @@
+<div class="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+
+  <!-- Detail header -->
+  <div class="bg-gray-50 border-b px-5 py-3 flex items-start justify-between gap-4">
+    <div class="min-w-0">
+      <p class="font-mono text-sm font-semibold text-gray-900 truncate">{{ f.filename }}</p>
+      <p class="text-xs text-gray-400 mt-0.5 font-mono truncate">{{ f.library_path or '—' }}</p>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      {% if f.library_path %}
+      <button
+        onclick="navigator.clipboard.writeText('{{ f.library_path }}').then(() => { this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy path', 1500); })"
+        class="text-xs bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded transition-colors">
+        Copy path
+      </button>
+      {% endif %}
+      <a href="/export.csv?q={{ f.hash }}"
+         class="text-xs text-blue-600 hover:underline px-2 py-1.5">Export</a>
+    </div>
+  </div>
+
+  <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+
+    <!-- Left column: Classification + Enrichment -->
+    <div class="space-y-4">
+
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Classification</h3>
+        <dl class="space-y-1.5">
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Category</dt>
+            <dd class="font-medium">{{ f.category or '—' }}{% if f.subcategory %} / {{ f.subcategory }}{% endif %}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Cat ID</dt>
+            <dd class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-[10px]">{{ f.cat_id or '—' }}</dd>
+          </div>
+          {% if f.content_type %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Content type</dt>
+            <dd>{{ f.content_type }}</dd>
+          </div>
+          {% endif %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Confidence</dt>
+            <dd class="{{ 'text-amber-500' if f.low_confidence else 'text-green-600' }} font-medium">
+              {% if f.confidence is not none %}
+                {{ "%.0f"|format(f.confidence * 100) }}%
+                {% if f.low_confidence %}<span class="text-amber-400"> (low — check manually)</span>{% endif %}
+              {% else %}—{% endif %}
+            </dd>
+          </div>
+          {% if f.mood %}
+          <div class="flex gap-2"><dt class="text-gray-400 w-24 shrink-0">Mood</dt><dd>{{ f.mood }}</dd></div>
+          {% endif %}
+          {% if f.energy %}
+          <div class="flex gap-2"><dt class="text-gray-400 w-24 shrink-0">Energy</dt><dd>{{ f.energy }}</dd></div>
+          {% endif %}
+          {% if f.bpm %}
+          <div class="flex gap-2"><dt class="text-gray-400 w-24 shrink-0">BPM</dt><dd class="tabular-nums">{{ "%.1f"|format(f.bpm) }}</dd></div>
+          {% endif %}
+          {% if f.key %}
+          <div class="flex gap-2"><dt class="text-gray-400 w-24 shrink-0">Key</dt><dd>{{ f.key }}</dd></div>
+          {% endif %}
+          {% if f.language %}
+          <div class="flex gap-2"><dt class="text-gray-400 w-24 shrink-0">Language</dt><dd>{{ f.language }}</dd></div>
+          {% endif %}
+        </dl>
+      </section>
+
+      {% if f.description %}
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Description</h3>
+        <p class="text-gray-600 leading-relaxed">{{ f.description }}</p>
+      </section>
+      {% endif %}
+
+      {% if f.tags %}
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Tags</h3>
+        <div class="flex flex-wrap gap-1">
+          {% for tag in f.tags %}
+          <span class="bg-blue-50 text-blue-700 rounded px-1.5 py-0.5 text-[10px] font-medium">{{ tag }}</span>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {% if f.usage_suggestions %}
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Usage</h3>
+        <ul class="space-y-1 text-gray-600">
+          {% for s in f.usage_suggestions %}
+          <li class="flex gap-1.5"><span class="text-gray-300">›</span>{{ s }}</li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if f.notes %}
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Notes</h3>
+        <p class="text-gray-500 italic">{{ f.notes }}</p>
+      </section>
+      {% endif %}
+
+    </div>
+
+    <!-- Right column: Technical + Audio Analysis -->
+    <div class="space-y-4">
+
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Technical</h3>
+        <dl class="space-y-1.5">
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Format</dt>
+            <dd class="font-mono">{{ f.format or '—' }} / {{ f.codec or '—' }}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Duration</dt>
+            <dd class="tabular-nums">{% if f.duration_s %}{{ "%.1f"|format(f.duration_s) }}s{% else %}—{% endif %}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Sample rate</dt>
+            <dd class="tabular-nums">{{ f.sample_rate or '—' }} Hz</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Bit depth</dt>
+            <dd>{{ f.bit_depth or '—' }}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Channels</dt>
+            <dd>{{ f.channels or '—' }}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Source</dt>
+            <dd>{{ f.source_adapter or '—' }}</dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Added</dt>
+            <dd>{{ f.date_added[:10] if f.date_added else '—' }}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- Audio preview -->
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Preview</h3>
+        <audio controls class="w-full" preload="none">
+          <source src="/audio/{{ f.hash }}">
+          <p class="text-gray-400">Preview unavailable</p>
+        </audio>
+      </section>
+
+      {% if f.yamnet_classes or f.audioclip_matches or f.whisper_summary or f.essentia_bpm %}
+      <section>
+        <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Audio Analysis</h3>
+        <dl class="space-y-2">
+
+          {% if f.yamnet_classes %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0 pt-0.5">YAMNet</dt>
+            <dd class="flex flex-wrap gap-1">
+              {% for cls in f.yamnet_classes[:6] %}
+              <span class="bg-purple-50 text-purple-700 rounded px-1.5 py-0.5 text-[10px]">{{ cls }}</span>
+              {% endfor %}
+            </dd>
+          </div>
+          {% endif %}
+
+          {% if f.audioclip_matches %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0 pt-0.5">AudioCLIP</dt>
+            <dd class="space-y-0.5">
+              {% for m in f.audioclip_matches[:5] %}
+              <div class="flex items-center gap-2">
+                <div class="bg-gray-100 rounded-full h-1.5 w-20 overflow-hidden">
+                  <div class="bg-indigo-400 h-full rounded-full" style="width: {{ (m.score * 100)|round|int }}%"></div>
+                </div>
+                <span class="text-gray-600">{{ m.prompt }}</span>
+                <span class="text-gray-400 tabular-nums">{{ "%.0f"|format(m.score * 100) }}%</span>
+              </div>
+              {% endfor %}
+            </dd>
+          </div>
+          {% endif %}
+
+          {% if f.whisper_summary %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Transcript</dt>
+            <dd class="italic text-gray-600">{{ f.whisper_summary }}</dd>
+          </div>
+          {% endif %}
+
+          {% if f.essentia_bpm %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Essentia BPM</dt>
+            <dd class="tabular-nums">{{ "%.1f"|format(f.essentia_bpm) }}</dd>
+          </div>
+          {% endif %}
+
+          {% if f.essentia_key %}
+          <div class="flex gap-2">
+            <dt class="text-gray-400 w-24 shrink-0">Essentia key</dt>
+            <dd>{{ f.essentia_key }}</dd>
+          </div>
+          {% endif %}
+
+        </dl>
+      </section>
+      {% endif %}
+
+      {% if f.models_run %}
+      <p class="text-[10px] text-gray-300">
+        Models run: {{ f.models_run | join(', ') }}
+        {% if f.models_failed %} · skipped: {{ f.models_failed | join(', ') }}{% endif %}
+        {% if f.analysis_duration_s %} · {{ "%.1f"|format(f.analysis_duration_s) }}s{% endif %}
+      </p>
+      {% endif %}
+
+    </div>
+  </div>
+</div>

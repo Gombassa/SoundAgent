@@ -8,6 +8,8 @@ aiofiles
 tenacity
 fastapi
 uvicorn[standard]
+jinja2
+python-multipart
 alembic
 soundfile
 scipy
