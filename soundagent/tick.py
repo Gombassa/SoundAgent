@@ -109,9 +109,29 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(staging_path.name, h, adapter_name, "enrich_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── P4: embed metadata (not yet implemented) ──────────────────────────────
-    if enriched:
-        log.info(f"{len(enriched)} file(s) enriched — metadata embedding not yet implemented (Phase 4)")
+    # ── 7: embed metadata ────────────────────────────────────────────────────
+    from soundagent.ucs import map_to_ucs
+    from soundagent.embed import embed
+
+    embedded: list[tuple] = []
+    for staging_path, h, adapter_name, meta, result in enriched:
+        try:
+            ucs = map_to_ucs(result, staging_path.name)
+            embed(staging_path, ucs)
+            embedded.append((staging_path, h, adapter_name, meta, result, ucs))
+            ingest_log.write(
+                staging_path.name, h, adapter_name, "embedded",
+                cat_id=ucs.cat_id,
+            )
+            log.info(f"Embedded: {staging_path.name} [{ucs.cat_id}]")
+        except Exception as exc:
+            log.error(f"Embed failed for {staging_path.name}: {exc}")
+            ingest_log.write(staging_path.name, h, adapter_name, "embed_error", error=str(exc))
+            errors.append(staging_path.name)
+
+    # ── P5: route + deliver (not yet implemented) ─────────────────────────────
+    if embedded:
+        log.info(f"{len(embedded)} file(s) embedded — routing/delivery not yet implemented (Phase 5)")
 
     summary_records = [
         {
@@ -120,10 +140,11 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             "source": src,
             "category": r.category,
             "subcategory": r.subcategory,
+            "cat_id": u.cat_id,
             "confidence": r.confidence,
             "low_confidence": r.low_confidence,
         }
-        for p, h, src, _, r in enriched
+        for p, h, src, _, r, u in embedded
     ]
     _write_summary(cfg, start, dry_run, summary_records, errors, active)
 

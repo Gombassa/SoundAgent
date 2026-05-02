@@ -18,6 +18,8 @@ soundagent/
 ├── ingest.py          Extension allowlist validator + atomic stage_file()
 ├── ingest_log.py      JSONL ingest event writer
 ├── enrichment.py      Claude API client, prompt, response parser, JSON cache
+├── ucs.py             EnrichmentResult → UCSFields mapper (CatID, FXName, etc.)
+├── embed.py           Metadata embedding: iXML/BWF · ID3 · FLAC · AIFF · XMP sidecar
 ├── webdav_server.py   wsgidav server start/stop/status via subprocess + PID file
 └── adapters/
     ├── __init__.py    get_adapter() factory
@@ -170,7 +172,7 @@ class AudioMetadata:
 | Validate | Extension/format allowlist → `_errors/` | **Done (P2)** |
 | Stage | Atomic copy to `_staging/` + ffprobe | **Done (P2)** |
 | Enrich | Claude API → structured JSON | **Done (P3)** |
-| Embed | iXML/BWF · ID3 · XMP sidecar | P4 |
+| Embed | iXML/BWF · ID3 · XMP sidecar | **Done (P4)** |
 | Route | Rules engine → target path | P5 |
 | Deliver | Atomic move → basehead_import_path | P5 |
 | Catalogue | SQLite upsert + FTS5 index | P6 |
@@ -249,8 +251,8 @@ Flow: cache lookup → Claude API call → JSON parse → validate → cache wri
 | Module | Phase | Purpose |
 |---|---|---|
 | ~~`soundagent/enrichment.py`~~ | ~~P3~~ | Done |
-| `soundagent/embed.py` | P4 | bwfmetaedit / mutagen / XMP writer |
-| `soundagent/ucs.py` | P4 | Enrichment → UCS field mapper |
+| ~~`soundagent/embed.py`~~ | ~~P4~~ | Done |
+| ~~`soundagent/ucs.py`~~ | ~~P4~~ | Done |
 | `soundagent/router.py` | P5 | Rules engine: category → library path |
 | `soundagent/catalogue.py` | P6 | SQLite schema, upsert, FTS5 queries |
 | `soundagent/api.py` | P8 | FastAPI search server |
