@@ -129,23 +129,41 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(staging_path.name, h, adapter_name, "embed_error", error=str(exc))
             errors.append(staging_path.name)
 
-    # ── P5: route + deliver (not yet implemented) ─────────────────────────────
-    if embedded:
-        log.info(f"{len(embedded)} file(s) embedded — routing/delivery not yet implemented (Phase 5)")
+    # ── 8+9: route + deliver ─────────────────────────────────────────────────
+    from soundagent.router import route, deliver
 
-    summary_records = [
-        {
-            "filename": p.name,
-            "hash": h,
-            "source": src,
-            "category": r.category,
-            "subcategory": r.subcategory,
-            "cat_id": u.cat_id,
-            "confidence": r.confidence,
-            "low_confidence": r.low_confidence,
-        }
-        for p, h, src, _, r, u in embedded
-    ]
+    delivered: list[dict] = []
+    for staging_path, h, adapter_name, meta, result, ucs in embedded:
+        try:
+            decision = route(staging_path, result, cfg)
+            final_path = deliver(staging_path, decision, h, dry_run=False)
+            ingest_log.write(
+                final_path.name, h, adapter_name, "delivered",
+                destination=str(final_path),
+                unclassified=decision.is_unclassified,
+                override=decision.override_used,
+            )
+            delivered.append({
+                "filename": final_path.name,
+                "hash": h,
+                "source": adapter_name,
+                "category": result.category,
+                "subcategory": result.subcategory,
+                "cat_id": ucs.cat_id,
+                "confidence": result.confidence,
+                "low_confidence": result.low_confidence,
+                "destination": str(final_path),
+            })
+        except Exception as exc:
+            log.error(f"Routing/delivery failed for {staging_path.name}: {exc}")
+            ingest_log.write(staging_path.name, h, adapter_name, "route_error", error=str(exc))
+            errors.append(staging_path.name)
+
+    # ── P6: catalogue (not yet implemented) ───────────────────────────────────
+    if delivered:
+        log.info(f"{len(delivered)} file(s) delivered — catalogue not yet implemented (Phase 6)")
+
+    summary_records = delivered
     _write_summary(cfg, start, dry_run, summary_records, errors, active)
 
     exit_code = 1 if errors else 0
