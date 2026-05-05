@@ -1,4 +1,5 @@
 anthropic
+python-dotenv
 pyyaml
 watchdog
 ffmpeg-python
@@ -14,6 +15,12 @@ alembic
 soundfile
 scipy
 numpy
+
+# ── Duplicate detection — external binary, not a pip package ─────────────────
+# fpcalc (Chromaprint) — download from https://acoustid.org/chromaprint
+# Place at tools/fpcalc.exe (Windows) or set fpcalc_path in config.yaml
+
+librosa>=0.10.0
 
 # ── P7 audio analysis — optional ML dependencies ─────────────────────────────
 # Install via scripts/install_audio_deps.bat or manually:

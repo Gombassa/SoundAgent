@@ -31,5 +31,5 @@ def stage_file(src: Path, staging_dir: Path, hash_fragment: str = "") -> Path:
 
     tmp = staging_dir / f".{dest.name}.tmp"
     shutil.copy2(src, tmp)
-    tmp.rename(dest)
+    tmp.replace(dest)
     return dest

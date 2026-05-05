@@ -25,7 +25,7 @@ class LocalAdapter(BaseAdapter):
         same_dir = src.resolve() == self.inbox.resolve()
         collected: list[Path] = []
 
-        for f in src.iterdir():
+        for f in src.rglob("*"):
             if not f.is_file() or f.name.startswith("."):
                 continue
             if same_dir:
@@ -34,10 +34,11 @@ class LocalAdapter(BaseAdapter):
             dest = self.inbox / f.name
             if dry_run:
                 log.info(f"[{self.name}] [dry-run] would copy {f.name} → inbox")
+                collected.append(dest)
                 continue
             tmp = self.inbox / f".{f.name}.tmp"
             shutil.copy2(f, tmp)
-            tmp.rename(dest)
+            tmp.replace(dest)
             log.info(f"[{self.name}] Collected {f.name}")
             collected.append(dest)
 

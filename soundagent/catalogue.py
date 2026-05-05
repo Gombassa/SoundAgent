@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS enrichment (
     notes               TEXT,
     language            TEXT,
     yamnet_classes      TEXT,   -- JSON array
-    audioclip_matches   TEXT,   -- JSON array of {prompt, score}
+    audioclip_matches   TEXT,   -- JSON array of {tag, category, score}
+    audioclip_raw_scores TEXT,  -- JSON object {tag: score} for full vocabulary
     whisper_summary     TEXT,
     whisper_language    TEXT,
     essentia_bpm        REAL,
@@ -78,7 +79,31 @@ CREATE TABLE IF NOT EXISTS enrichment (
     essentia_mood       TEXT,   -- JSON dict
     essentia_genre      TEXT,   -- JSON dict
     models_run          TEXT,   -- JSON array
-    models_failed       TEXT    -- JSON array
+    models_failed       TEXT,   -- JSON array
+    librosa_bpm         REAL,
+    librosa_key         TEXT,
+    librosa_dynamic_complexity REAL
+);
+
+CREATE TABLE IF NOT EXISTS fingerprints (
+    hash        TEXT PRIMARY KEY REFERENCES files(hash) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    duration_s  REAL,
+    fpcalc_ver  TEXT,
+    created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS duplicates (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename         TEXT NOT NULL,
+    held_path        TEXT NOT NULL,
+    match_type       TEXT NOT NULL,
+    matched_hash     TEXT,
+    matched_path     TEXT,
+    matched_filename TEXT,
+    similarity       REAL DEFAULT 1.0,
+    detected_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    resolved         INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS ingest_log (
@@ -126,7 +151,8 @@ _NEW_ENRICHMENT_COLUMNS = [
     ("notes",             "TEXT"),
     ("language",          "TEXT"),
     ("yamnet_classes",    "TEXT"),
-    ("audioclip_matches", "TEXT"),
+    ("audioclip_matches",    "TEXT"),
+    ("audioclip_raw_scores", "TEXT"),
     ("whisper_summary",   "TEXT"),
     ("whisper_language",  "TEXT"),
     ("essentia_bpm",      "REAL"),
@@ -135,6 +161,9 @@ _NEW_ENRICHMENT_COLUMNS = [
     ("essentia_genre",    "TEXT"),
     ("models_run",        "TEXT"),
     ("models_failed",     "TEXT"),
+    ("librosa_bpm",       "REAL"),
+    ("librosa_key",       "TEXT"),
+    ("librosa_dynamic_complexity", "REAL"),
 ]
 
 _FTS_TRIGGERS = (
@@ -291,6 +320,7 @@ class Catalogue:
         language: Optional[str] = None,
         yamnet_classes: Optional[list[str]] = None,
         audioclip_matches: Optional[list[dict]] = None,
+        audioclip_raw_scores: Optional[dict] = None,
         whisper_summary: Optional[str] = None,
         whisper_language: Optional[str] = None,
         essentia_bpm: Optional[float] = None,
@@ -299,6 +329,9 @@ class Catalogue:
         essentia_genre: Optional[dict] = None,
         models_run: Optional[list[str]] = None,
         models_failed: Optional[list[str]] = None,
+        librosa_bpm: Optional[float] = None,
+        librosa_key: Optional[str] = None,
+        librosa_dynamic_complexity: Optional[float] = None,
     ) -> None:
         def _j(x):
             return json.dumps(x) if x is not None else None
@@ -309,10 +342,12 @@ class Catalogue:
               (hash, category, subcategory, cat_id, description, tags,
                mood, energy, bpm, key, confidence, low_confidence,
                content_type, usage_suggestions, notes, language,
-               yamnet_classes, audioclip_matches, whisper_summary, whisper_language,
+               yamnet_classes, audioclip_matches, audioclip_raw_scores,
+               whisper_summary, whisper_language,
                essentia_bpm, essentia_key, essentia_mood, essentia_genre,
-               models_run, models_failed)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               models_run, models_failed,
+               librosa_bpm, librosa_key, librosa_dynamic_complexity)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(hash) DO UPDATE SET
               category=excluded.category, subcategory=excluded.subcategory,
               cat_id=excluded.cat_id, description=excluded.description,
@@ -325,6 +360,7 @@ class Catalogue:
               language=excluded.language,
               yamnet_classes=excluded.yamnet_classes,
               audioclip_matches=excluded.audioclip_matches,
+              audioclip_raw_scores=excluded.audioclip_raw_scores,
               whisper_summary=excluded.whisper_summary,
               whisper_language=excluded.whisper_language,
               essentia_bpm=excluded.essentia_bpm,
@@ -332,15 +368,20 @@ class Catalogue:
               essentia_mood=excluded.essentia_mood,
               essentia_genre=excluded.essentia_genre,
               models_run=excluded.models_run,
-              models_failed=excluded.models_failed
+              models_failed=excluded.models_failed,
+              librosa_bpm=excluded.librosa_bpm,
+              librosa_key=excluded.librosa_key,
+              librosa_dynamic_complexity=excluded.librosa_dynamic_complexity
             """,
             (hash, category, subcategory, cat_id, description,
              _j(tags), mood, energy, bpm, key,
              confidence, int(low_confidence),
              content_type, _j(usage_suggestions), notes, language,
-             _j(yamnet_classes), _j(audioclip_matches), whisper_summary, whisper_language,
+             _j(yamnet_classes), _j(audioclip_matches), _j(audioclip_raw_scores),
+             whisper_summary, whisper_language,
              essentia_bpm, essentia_key, _j(essentia_mood), _j(essentia_genre),
-             _j(models_run), _j(models_failed)),
+             _j(models_run), _j(models_failed),
+             librosa_bpm, librosa_key, librosa_dynamic_complexity),
         )
         self._con.commit()
 
@@ -351,6 +392,97 @@ class Catalogue:
             "INSERT INTO ingest_log (ts, filename, hash, source, status, detail) VALUES (?,?,?,?,?,?)",
             (_now(), filename, hash, source, status,
              json.dumps(detail) if detail else None),
+        )
+        self._con.commit()
+
+    # ── Fingerprints & duplicates ─────────────────────────────────────────────
+
+    def get_file_by_hash(self, hash: str) -> Optional[dict]:
+        """Return {hash, filename, library_path} for a catalogued file, or None."""
+        row = self._con.execute(
+            "SELECT hash, filename, library_path FROM files WHERE hash = ?",
+            (hash,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def store_fingerprint(
+        self,
+        hash: str,
+        fingerprint: str,
+        duration_s: Optional[float],
+        fpcalc_ver: Optional[str],
+    ) -> None:
+        """INSERT OR REPLACE into fingerprints table."""
+        self._con.execute(
+            """
+            INSERT OR REPLACE INTO fingerprints (hash, fingerprint, duration_s, fpcalc_ver)
+            VALUES (?, ?, ?, ?)
+            """,
+            (hash, fingerprint, duration_s, fpcalc_ver),
+        )
+        self._con.commit()
+
+    def find_fingerprint_match(
+        self,
+        fingerprint: str,
+        threshold: float = 0.85,
+    ) -> Optional[dict]:
+        """
+        Compare fingerprint against all stored fingerprints in Python.
+        Returns {hash, path, filename, similarity} for the best match above
+        threshold, or None. Logs a warning when the table exceeds 10,000 rows.
+        """
+        from soundagent.fingerprinter import similarity as fp_similarity
+
+        rows = self._con.execute(
+            """
+            SELECT fp.hash, fp.fingerprint, f.library_path, f.filename
+            FROM fingerprints fp
+            JOIN files f ON f.hash = fp.hash
+            WHERE f.library_path IS NOT NULL
+            """
+        ).fetchall()
+
+        if len(rows) > 10_000:
+            log.warning(
+                f"fingerprints table has {len(rows)} rows — "
+                "similarity search may be slow; consider a future indexing strategy"
+            )
+
+        best_sim = 0.0
+        best: Optional[dict] = None
+        for row in rows:
+            sim = fp_similarity(fingerprint, row["fingerprint"])
+            if sim >= threshold and sim > best_sim:
+                best_sim = sim
+                best = {
+                    "hash": row["hash"],
+                    "path": row["library_path"],
+                    "filename": row["filename"],
+                    "similarity": sim,
+                }
+        return best
+
+    def log_duplicate(
+        self,
+        filename: str,
+        held_path: str,
+        match_type: str,
+        matched_hash: Optional[str],
+        matched_path: Optional[str],
+        matched_filename: Optional[str],
+        similarity: float,
+    ) -> None:
+        """INSERT into duplicates table."""
+        self._con.execute(
+            """
+            INSERT INTO duplicates
+              (filename, held_path, match_type, matched_hash,
+               matched_path, matched_filename, similarity)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (filename, held_path, match_type, matched_hash,
+             matched_path, matched_filename, similarity),
         )
         self._con.commit()
 

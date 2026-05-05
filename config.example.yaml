@@ -23,15 +23,31 @@ audio_analysis:
   # Whisper model: tiny | base | small | medium | large
   whisper_model: base
 
-  # AudioCLIP weights — download manually, ~800 MB
-  # See README for download instructions
-  audioclip_weights_path: models/audioclip/AudioCLIP.pt
+  # AudioCLIP weights (Partial-Training variant, ~512 MB — already at this path)
+  audioclip_weights_path: models/audioclip/AudioCLIP-Partial-Training.pt
+
+  # Tag vocabulary — flat YAML of category → [tags], embedded at startup
+  tag_vocabulary_path: config/tag_vocabulary.yaml
+
+  # Maximum tags returned per file (top-N after threshold filter)
+  audioclip_max_tags: 15
+
+  # YAMNet: number of top sound classes sent to Claude
+  yamnet_top_n: 5
 
   # AudioCLIP score threshold; only matches above this are stored
   audioclip_threshold: 0.2
 
+  # AudioCLIP: max matches sent to Claude (top N by score after threshold filter)
+  audioclip_top_n: 5
+
   # Set true to re-run audio analysis on files that were enriched before P7
   run_on_existing: false
+
+duplicate_detection:
+  enabled: true
+  fpcalc_path: tools/fpcalc.exe          # path to fpcalc binary; "fpcalc" if on PATH
+  fingerprint_similarity_threshold: 0.85  # 0.0–1.0; lower = more aggressive matching
 
 sources:
 
@@ -40,45 +56,3 @@ sources:
     type: local
     path: D:\SoundLibrary_Inbox
     enabled: true
-
-  # ── Existing local libraries ─────────────────────────────────────────────────
-  - name: field-recordings-d
-    type: local
-    path: D:\Field Recordings
-    enabled: true
-
-  - name: field-recordings-c
-    type: local
-    path: C:\Users\robin\Music\Field Recordings
-    enabled: true
-
-  # ── Google Drive (via Google Drive for Desktop — mounts as G:\) ─────────────
-  - name: gdrive-field-recordings
-    type: local
-    path: G:\My Drive\Field recordings
-    enabled: false
-
-  - name: gdrive-to-sort
-    type: local
-    path: G:\My Drive\To sort
-    enabled: false
-
-  # ── rclone (alternative Google Drive — also works for any cloud provider) ───
-  - name: gdrive-rclone
-    type: rclone
-    remote: gdrive             # name of your configured rclone remote
-    remote_path: /
-    mode: sync
-    interval: 60
-    enabled: false
-
-  # ── Mobile ingest via WebDAV ─────────────────────────────────────────────────
-  # Start with: python -m soundagent webdav start
-  # iOS: Files → Browse → ··· → Connect to Server → http://<machine-ip>:8080
-  - name: mobile-webdav
-    type: webdav
-    port: 8080
-    auth: true
-    username: soundagent
-    # password: set SOUNDAGENT_WEBDAV_PASSWORD env var
-    enabled: false

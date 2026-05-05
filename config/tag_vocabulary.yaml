@@ -1,0 +1,133 @@
+# AudioCLIP tag vocabulary for SoundAgent
+# Each key is a category; values are flat lists of tags embedded as text at startup.
+
+environment:
+  - indoor
+  - outdoor
+  - urban
+  - rural
+  - wilderness
+  - studio recording
+  - field recording
+  - forest
+  - cave
+  - coastal
+  - underground
+  - mountain
+
+weather:
+  - rain
+  - heavy rain
+  - light rain
+  - drizzle
+  - thunder
+  - thunderstorm
+  - wind
+  - strong wind
+  - breeze
+  - snow
+  - hail
+  - fog
+  - mist
+  - calm weather
+  - storm
+
+water:
+  - river
+  - fast river
+  - stream
+  - waterfall
+  - ocean waves
+  - lake
+  - rain on water
+  - dripping water
+  - running tap
+  - fountain
+  - sea
+  - rain on metal
+  - underwater
+  - drain
+
+fauna:
+  - bird song
+  - bird call
+  - insects
+  - crickets
+  - frogs
+  - dogs barking
+  - cattle
+  - sheep
+  - wildlife
+  - wolf howl
+  - horse
+  - whale
+  - jungle wildlife
+  - marine life
+  - bees
+human:
+  - speech
+  - crowd noise
+  - footsteps on gravel
+  - footsteps on wood
+  - breathing
+  - door
+  - keyboard typing
+  - applause
+  - children playing
+  - laughter
+  - coughing
+  - singing
+  - office ambience
+  - construction site
+
+transport:
+  - car
+  - traffic
+  - train
+  - aircraft
+  - helicopter
+  - boat
+  - motorcycle
+  - bicycle
+  - tram
+  - bus
+  - electric vehicle
+  - ship horn
+  - drone
+
+event:
+  - bar ambience
+  - crowd noise
+  - cheering
+  - music
+  - electronic music
+  - techno
+  - DJ set
+  - live music
+  - acoustic guitar
+  - bass heavy music
+  - distant music
+  - generator hum
+  - art car
+  - megaphone
+  - festival atmosphere
+  - night ambience
+  - desert wind
+  - dust storm
+
+texture:
+  - continuous tone
+  - rhythmic
+  - intermittent
+  - sparse
+  - dense
+  - tonal
+  - noisy
+  - transient
+  - silence
+  - low hum
+  - high pitched
+  - echo
+  - reverb
+  - bright
+  - dark

@@ -32,11 +32,18 @@ def _get_model():
 
     _MODEL = hub.load("https://tfhub.dev/google/yamnet/1")
 
-    # Load class map from the model
+    # Load class map — may be a local path on Windows (urllib can't handle "C:\...")
     class_map_path = _MODEL.class_map_path().numpy().decode()
-    with urllib.request.urlopen(class_map_path) as f:
-        reader = csv.DictReader(io.TextIOWrapper(f))
-        _CLASS_NAMES = [row["display_name"] for row in reader]
+    import pathlib
+    p = pathlib.Path(class_map_path)
+    if p.exists():
+        with open(p, newline="") as f:
+            reader = csv.DictReader(f)
+            _CLASS_NAMES = [row["display_name"] for row in reader]
+    else:
+        with urllib.request.urlopen(class_map_path) as f:
+            reader = csv.DictReader(io.TextIOWrapper(f))
+            _CLASS_NAMES = [row["display_name"] for row in reader]
 
     return _MODEL, _CLASS_NAMES
 
@@ -59,7 +66,7 @@ def analyse(waveform: np.ndarray, sample_rate: int, audio_cfg: dict) -> dict:
     scores_np = scores.numpy()
     mean_scores = scores_np.mean(axis=0)
 
-    top_n = 10
+    top_n = audio_cfg.get("yamnet_top_n", 5)
     top_indices = mean_scores.argsort()[-top_n:][::-1]
     top_classes = [class_names[i] for i in top_indices]
 

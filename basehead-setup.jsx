@@ -27,61 +27,6 @@ const STEPS = [
   },
   {
     id: 3,
-    section: "IMPORT",
-    title: "Import Local Libraries",
-    tasks: [
-      {
-        label: "Import D:\\Field Recordings",
-        note: "NodeTree → right-click Imports → Add Import Folder → browse to D:\\Field Recordings",
-        path: "D:\\Field Recordings",
-        tag: "local",
-      },
-      {
-        label: "Import C:\\Users\\robin\\Music\\Field Recordings",
-        note: "Repeat: right-click Imports → Add Import Folder → browse to path",
-        path: "C:\\Users\\robin\\Music\\Field Recordings",
-        tag: "local",
-      },
-      { label: "Let Basehead index both folders", note: "May take a few minutes depending on file count — progress shown in status bar" },
-      { label: "Verify files appear in Results List", note: "Type a broad keyword in search bar to confirm indexing is complete" },
-      { label: "Assign a Group colour to each import to distinguish them", note: "Right-click the Import in NodeTree → Assign Group → pick a colour" },
-    ],
-  },
-  {
-    id: 4,
-    section: "GDRIVE",
-    title: "Connect Google Drive Libraries",
-    intro: "Basehead cannot mount Google Drive natively. Two options — pick one.",
-    options: [
-      {
-        label: "Option A — Google Drive for Desktop (recommended)",
-        steps: [
-          "Download and install Google Drive for Desktop from drive.google.com",
-          "Sign in — your Drive appears as a mapped drive (usually G:\\ or similar)",
-          "In Basehead: Add Import Folder → navigate to the mapped drive paths below",
-          "Basehead treats them as local folders from here",
-        ],
-        paths: [
-          "G:\\My Drive\\Field recordings",
-          "G:\\My Drive\\To sort",
-        ],
-        note: "Both folders confirmed on your G: drive. Add each as a separate Import in Basehead so you can filter or colour-code them independently.",
-      },
-      {
-        label: "Option B — rclone mount (for SoundAgent integration later)",
-        steps: [
-          "Install rclone and configure a Google Drive remote: rclone config",
-          "Mount to a local path: rclone mount gdrive: G:\\ --vfs-cache-mode writes",
-          "Add the mounted paths as Import Folders in Basehead as above",
-          "This is the same adapter SoundAgent will use — good to test early",
-        ],
-        paths: [],
-        note: "Option B is slightly more technical but sets up the rclone integration you'll need for SoundAgent anyway.",
-      },
-    ],
-  },
-  {
-    id: 5,
     section: "INBOX",
     title: "Create SoundAgent Inbox & Delivery Folder",
     tasks: [
@@ -108,7 +53,7 @@ const STEPS = [
     ],
   },
   {
-    id: 6,
+    id: 4,
     section: "METADATA",
     title: "Configure Metadata Columns",
     tasks: [
@@ -121,7 +66,7 @@ const STEPS = [
     ],
   },
   {
-    id: 7,
+    id: 5,
     section: "DAW",
     title: "Set Up Basehead Connect for Pro Tools",
     tasks: [
@@ -135,7 +80,7 @@ const STEPS = [
     ],
   },
   {
-    id: 8,
+    id: 6,
     section: "SEARCH",
     title: "Test Search & Tagging",
     tasks: [
@@ -148,7 +93,7 @@ const STEPS = [
     ],
   },
   {
-    id: 9,
+    id: 7,
     section: "VERIFY",
     title: "End-to-End Delivery Test",
     intro: "Manual simulation of what SoundAgent will do automatically.",

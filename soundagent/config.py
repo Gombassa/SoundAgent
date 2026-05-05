@@ -3,6 +3,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 @dataclass
@@ -22,6 +25,7 @@ class Config:
     sources: list[SourceConfig]
     anthropic_api_key: str
     audio_analysis: dict
+    duplicate_detection: dict
     raw: dict
 
 
@@ -62,5 +66,6 @@ def load_config(path: str = "config.yaml") -> Config:
         sources=sources,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", raw.get("anthropic_api_key", "")),
         audio_analysis=raw.get("audio_analysis", {}),
+        duplicate_detection=raw.get("duplicate_detection", {}),
         raw=raw,
     )

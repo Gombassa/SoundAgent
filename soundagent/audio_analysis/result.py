@@ -15,6 +15,7 @@ class AnalysisResult:
 
     # AudioCLIP
     audioclip_matches: list[dict] = field(default_factory=list)
+    audioclip_raw_scores: dict = field(default_factory=dict)
 
     # Whisper
     whisper_language: Optional[str] = None
@@ -27,6 +28,16 @@ class AnalysisResult:
     essentia_loudness: Optional[float] = None
     essentia_mood: Optional[dict] = None
     essentia_genre: Optional[dict] = None
+
+    # librosa (Windows music analysis fallback)
+    librosa_bpm: Optional[float] = None
+    librosa_bpm_confidence: Optional[float] = None
+    librosa_key: Optional[str] = None
+    librosa_loudness_rms: Optional[float] = None
+    librosa_dynamic_complexity: Optional[float] = None
+    librosa_spectral_centroid: Optional[float] = None
+    librosa_zero_crossing_rate: Optional[float] = None
+    librosa_source: Optional[str] = None
 
     # Bookkeeping
     models_run: list[str] = field(default_factory=list)

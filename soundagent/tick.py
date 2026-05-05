@@ -25,6 +25,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
 
     errors_dir = cfg.library_root / "_errors"
     staging_dir = cfg.library_root / "_staging"
+    duplicates_dir = cfg.library_root / "_duplicates"
     ingest_log = IngestLog(cfg.library_root / "ingest.log")
     cache = EnrichmentCache(
         cfg.library_root / "enrichment_cache.json",
@@ -32,6 +33,12 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     )
     catalogue = open_catalogue(cfg.library_root)
     errors: list[str] = []
+    dup_counts: dict[str, int] = {"exact_hash": 0, "fingerprint_match": 0}
+
+    dup_cfg = cfg.duplicate_detection
+    dup_enabled = dup_cfg.get("enabled", True)
+    fpcalc_path = dup_cfg.get("fpcalc_path", "fpcalc")
+    fp_threshold = float(dup_cfg.get("fingerprint_similarity_threshold", 0.85))
 
     if not catalogue.integrity_check():
         log.warning("Catalogue integrity check failed — proceeding cautiously")
@@ -51,20 +58,58 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
 
     if dry_run:
         log.info(f"[dry-run] {len(raw_files)} file(s) would be processed")
-        _write_summary(cfg, start, dry_run, [], errors, active)
+        _write_summary(cfg, start, dry_run, [], errors, active, dup_counts)
         return 0
 
     # ── 3: dedup (within-tick + cross-tick via catalogue) ────────────────────
+    from soundagent.duplicate_handler import quarantine as quarantine_duplicate
+
+    duplicates_dir.mkdir(parents=True, exist_ok=True)
+
+    # Same-name files from recursive scan land at the same inbox path; keep first only.
+    seen_paths: set[Path] = set()
+    unique_raw: list[tuple[Path, str]] = []
+    for f, adapter_name in raw_files:
+        if f not in seen_paths:
+            seen_paths.add(f)
+            unique_raw.append((f, adapter_name))
+    raw_files = unique_raw
+
     seen_hashes: dict[str, str] = {}
     deduped: list[tuple[Path, str, str]] = []
     for f, adapter_name in raw_files:
+        if not f.exists():
+            log.warning(f"Inbox file disappeared before processing, skipping: {f.name}")
+            continue
         h = sha256(f)
         if h in seen_hashes:
-            log.info(f"Duplicate of {seen_hashes[h]!r}, skipping {f.name}")
+            log.info(f"Within-tick duplicate of {seen_hashes[h]!r}, skipping {f.name}")
             continue
         if catalogue.is_known(h):
-            log.info(f"Already in catalogue, skipping {f.name}")
-            catalogue.log_event(f.name, h, adapter_name, "skipped_known")
+            existing = catalogue.get_file_by_hash(h)
+            matched_path = existing["library_path"] if existing else ""
+            matched_filename = existing["filename"] if existing else ""
+            held = quarantine_duplicate(
+                file_path=f,
+                duplicates_dir=duplicates_dir,
+                match_type="exact_hash",
+                matched_hash=h,
+                matched_path=matched_path or "",
+                matched_filename=matched_filename or "",
+                similarity=1.0,
+                dry_run=dry_run,
+            )
+            catalogue.log_duplicate(
+                filename=f.name,
+                held_path=str(held),
+                match_type="exact_hash",
+                matched_hash=h,
+                matched_path=matched_path,
+                matched_filename=matched_filename,
+                similarity=1.0,
+            )
+            ingest_log.write(f.name, h, adapter_name, "duplicate_exact")
+            dup_counts["exact_hash"] += 1
             continue
         seen_hashes[h] = f.name
         deduped.append((f, h, adapter_name))
@@ -77,7 +122,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             valid.append((f, h, adapter_name))
         else:
             dest = errors_dir / f.name
-            f.rename(dest)
+            f.replace(dest)
             log.warning(f"Rejected (unsupported format): {f.name}")
             ingest_log.write(f.name, h, adapter_name, "rejected")
             errors.append(f.name)
@@ -102,11 +147,58 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             ingest_log.write(f.name, h, adapter_name, "error", error=str(exc))
             errors.append(f.name)
 
+    # ── 5a: fingerprint + near-duplicate check ───────────────────────────────
+    from soundagent.fingerprinter import generate as fingerprint_file
+    from soundagent.fingerprinter import is_available as fpcalc_is_available
+
+    fp_results: dict[str, dict | None] = {}  # hash → fp_result
+    fingerprinted: list[tuple[Path, str, str, AudioMetadata]] = []
+
+    if dup_enabled:
+        if not fpcalc_is_available(fpcalc_path):
+            log.warning(
+                "fpcalc not found — fingerprint matching disabled for this tick. "
+                "Install from https://acoustid.org/chromaprint or set fpcalc_path in config."
+            )
+            fingerprinted = staged
+        else:
+            for staging_path, h, adapter_name, meta in staged:
+                fp = fingerprint_file(staging_path, fpcalc_path=fpcalc_path)
+                fp_results[h] = fp
+                if fp:
+                    match = catalogue.find_fingerprint_match(fp["fingerprint"], threshold=fp_threshold)
+                    if match:
+                        held = quarantine_duplicate(
+                            file_path=staging_path,
+                            duplicates_dir=duplicates_dir,
+                            match_type="fingerprint_match",
+                            matched_hash=match["hash"],
+                            matched_path=match["path"] or "",
+                            matched_filename=match["filename"] or "",
+                            similarity=match["similarity"],
+                            dry_run=dry_run,
+                        )
+                        catalogue.log_duplicate(
+                            filename=staging_path.name,
+                            held_path=str(held),
+                            match_type="fingerprint_match",
+                            matched_hash=match["hash"],
+                            matched_path=match["path"],
+                            matched_filename=match["filename"],
+                            similarity=match["similarity"],
+                        )
+                        ingest_log.write(staging_path.name, h, adapter_name, "duplicate_fingerprint")
+                        dup_counts["fingerprint_match"] += 1
+                        continue
+                fingerprinted.append((staging_path, h, adapter_name, meta))
+    else:
+        fingerprinted = staged
+
     # ── 6: audio analysis ────────────────────────────────────────────────────
     from soundagent.audio_analysis.pipeline import analyse as audio_analyse
 
     analysed: list[tuple[Path, str, str, AudioMetadata, object]] = []
-    for staging_path, h, adapter_name, meta in staged:
+    for staging_path, h, adapter_name, meta in fingerprinted:
         try:
             audio_result = audio_analyse(
                 str(staging_path), h, cfg.audio_analysis,
@@ -222,6 +314,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 # audio analysis fields for catalogue
                 "yamnet_classes": audio_result.yamnet_classes,
                 "audioclip_matches": audio_result.audioclip_matches,
+                "audioclip_raw_scores": audio_result.audioclip_raw_scores,
                 "whisper_summary": audio_result.whisper_summary,
                 "whisper_language": audio_result.whisper_language,
                 "essentia_bpm": audio_result.essentia_bpm,
@@ -273,6 +366,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 language=rec.get("language"),
                 yamnet_classes=rec.get("yamnet_classes"),
                 audioclip_matches=rec.get("audioclip_matches"),
+                audioclip_raw_scores=rec.get("audioclip_raw_scores"),
                 whisper_summary=rec.get("whisper_summary"),
                 whisper_language=rec.get("whisper_language"),
                 essentia_bpm=rec.get("essentia_bpm"),
@@ -287,13 +381,21 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
                 destination=rec["destination"],
                 cat_id=rec["cat_id"],
             )
+            fp = fp_results.get(rec["hash"])
+            if fp:
+                catalogue.store_fingerprint(
+                    hash=rec["hash"],
+                    fingerprint=fp["fingerprint"],
+                    duration_s=fp.get("duration"),
+                    fpcalc_ver=None,
+                )
         except Exception as exc:
             log.error(f"Catalogue upsert failed for {rec['filename']}: {exc}")
 
     catalogue.close()
 
     summary_records = delivered
-    _write_summary(cfg, start, dry_run, summary_records, errors, active)
+    _write_summary(cfg, start, dry_run, summary_records, errors, active, dup_counts)
 
     exit_code = 1 if errors else 0
     elapsed = time.monotonic() - start
@@ -301,7 +403,10 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     return exit_code
 
 
-def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, errors: list, active: list) -> None:
+def _write_summary(
+    cfg: Config, start: float, dry_run: bool, staged: list,
+    errors: list, active: list, dup_counts: dict,
+) -> None:
     import time as _t
     elapsed = round(_t.monotonic() - start, 2)
     summary = {
@@ -310,6 +415,11 @@ def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, error
         "sources": [s.name for s in active],
         "staged": len(staged),
         "errors": errors,
+        "duplicates": {
+            "exact_hash": dup_counts.get("exact_hash", 0),
+            "fingerprint_match": dup_counts.get("fingerprint_match", 0),
+            "total": sum(dup_counts.values()),
+        },
     }
     if not dry_run and cfg.library_root.exists():
         (cfg.library_root / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -320,6 +430,10 @@ def _write_summary(cfg: Config, start: float, dry_run: bool, staged: list, error
     print(f"Duration : {elapsed}s")
     print(f"Sources  : {', '.join(s.name for s in active) or 'none'}")
     print(f"Delivered: {len(staged)} file(s)")
+    total_dups = sum(dup_counts.values())
+    if total_dups:
+        print(f"Dupes    : {total_dups} held "
+              f"({dup_counts['exact_hash']} exact, {dup_counts['fingerprint_match']} fingerprint)")
     if errors:
         print(f"Errors   : {len(errors)} file(s)")
         for e in errors:

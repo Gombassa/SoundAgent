@@ -84,7 +84,7 @@ def deliver(
     # Atomic move to library (copy + rename so a crash mid-write leaves source intact)
     tmp = lib_dest.parent / f".{lib_dest.name}.tmp"
     shutil.copy2(staging_path, tmp)
-    tmp.rename(lib_dest)
+    tmp.replace(lib_dest)
     staging_path.unlink(missing_ok=True)
 
     # Copy to Basehead import folder only when it differs from the library root.

@@ -41,15 +41,12 @@ VALID_SUBCATEGORIES: dict[str, set[str]] = {
 VALID_CATEGORIES = set(VALID_SUBCATEGORIES)
 
 _SYSTEM = (
-    "You are a professional sound library metadata specialist with deep knowledge of "
-    "UCS (Universal Category System) conventions and professional audio workflows. "
-    "When audio analysis data is provided, treat it as ground truth from ML models "
-    "that have listened to the actual audio — synthesise and interpret those detections "
-    "rather than guessing from the filename alone. "
+    "You are a professional sound library metadata specialist. "
+    "Treat audio analysis data as ground truth from ML models — synthesise it rather than "
+    "guessing from the filename alone. "
     "Return ONLY valid JSON — no markdown, no explanation, no code fences. "
-    "For suggested_filename: output only the UCS code and slug "
-    "e.g. WTHR_rain-woodland-wind-light. "
-    "Do not include sample rate, bit depth, file extension, or index numbers."
+    "For suggested_filename: UCS code + slug only, e.g. WTHR_rain-woodland-wind-light. "
+    "No sample rate, bit depth, extension, or index numbers."
 )
 
 
@@ -80,7 +77,7 @@ def _build_prompt(filename: str, meta: AudioMetadata, analysis_result: "Analysis
 
         if analysis_result.audioclip_matches:
             matches_str = "; ".join(
-                f"{m['prompt']} ({m['score']:.2f})"
+                f"{m['tag']} [{m.get('category', '')}] ({m['score']:.2f})"
                 for m in analysis_result.audioclip_matches[:5]
             )
             lines.append(f"AudioCLIP matches: {matches_str}")
@@ -94,18 +91,36 @@ def _build_prompt(filename: str, meta: AudioMetadata, analysis_result: "Analysis
             ]
 
         if analysis_result.content_type == "music":
-            lines += ["", "## Music Analysis (Essentia)"]
-            if analysis_result.essentia_bpm is not None:
+            has_essentia = (
+                analysis_result.essentia_bpm is not None or analysis_result.essentia_key
+            )
+            if has_essentia:
+                lines += ["", "## Music Analysis (Essentia)"]
+                if analysis_result.essentia_bpm is not None:
+                    conf = (
+                        f" (confidence: {analysis_result.essentia_bpm_confidence:.2f})"
+                        if analysis_result.essentia_bpm_confidence is not None else ""
+                    )
+                    lines.append(f"BPM: {analysis_result.essentia_bpm:.1f}{conf}")
+                if analysis_result.essentia_key:
+                    lines.append(f"Key: {analysis_result.essentia_key}")
+                if analysis_result.essentia_mood:
+                    mood_str = ", ".join(f"{k}: {v:.2f}" for k, v in analysis_result.essentia_mood.items())
+                    lines.append(f"Mood scores: {mood_str}")
+
+            if analysis_result.librosa_bpm is not None:
+                lines += ["", "## Music Analysis (librosa — Windows)"]
                 conf = (
-                    f" (confidence: {analysis_result.essentia_bpm_confidence:.2f})"
-                    if analysis_result.essentia_bpm_confidence is not None else ""
+                    f" (confidence: {analysis_result.librosa_bpm_confidence:.1f})"
+                    if analysis_result.librosa_bpm_confidence is not None else ""
                 )
-                lines.append(f"BPM: {analysis_result.essentia_bpm:.1f}{conf}")
-            if analysis_result.essentia_key:
-                lines.append(f"Key: {analysis_result.essentia_key}")
-            if analysis_result.essentia_mood:
-                mood_str = ", ".join(f"{k}: {v:.2f}" for k, v in analysis_result.essentia_mood.items())
-                lines.append(f"Mood scores: {mood_str}")
+                lines.append(f"BPM: {analysis_result.librosa_bpm:.1f}{conf}")
+                if analysis_result.librosa_key:
+                    lines.append(f"Key: {analysis_result.librosa_key}")
+                if analysis_result.librosa_dynamic_complexity is not None:
+                    lines.append(f"Dynamic complexity: {analysis_result.librosa_dynamic_complexity:.3f}")
+                if analysis_result.librosa_spectral_centroid is not None:
+                    lines.append(f"Spectral brightness: {analysis_result.librosa_spectral_centroid:.1f} Hz (mean)")
     else:
         lines += [
             "",
@@ -211,6 +226,22 @@ class EnrichmentResult:
         )
 
 
+# ── Analysis fingerprint helpers ──────────────────────────────────────────────
+
+def _analysis_fingerprint(analysis_result: "AnalysisResult") -> dict:
+    return {
+        "models_run": sorted(analysis_result.models_run),
+        "yamnet_top": analysis_result.yamnet_classes[0] if analysis_result.yamnet_classes else None,
+    }
+
+
+def _fingerprints_match(stored: dict, current: dict) -> bool:
+    return (
+        stored.get("models_run") == current.get("models_run")
+        and stored.get("yamnet_top") == current.get("yamnet_top")
+    )
+
+
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 class EnrichmentCache:
@@ -235,8 +266,11 @@ class EnrichmentCache:
         except (TypeError, KeyError):
             return None
 
-    def set(self, file_hash: str, result: EnrichmentResult) -> None:
-        self._data[file_hash] = result.to_dict()
+    def set(self, file_hash: str, result: EnrichmentResult, analysis_result: "AnalysisResult" = None) -> None:
+        entry = result.to_dict()
+        if analysis_result is not None:
+            entry["_fingerprint"] = _analysis_fingerprint(analysis_result)
+        self._data[file_hash] = entry
         self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 
 
@@ -334,6 +368,21 @@ def enrich(
         cached.original_filename = filename
         return cached
 
+    # Analysis-unchanged shortcut: when run_on_existing forces a cache bypass,
+    # avoid a Claude call if the analysis produced the same result as last time.
+    if cache.run_on_existing:
+        stored_entry = cache._data.get(file_hash)
+        if stored_entry is not None:
+            stored_fp = stored_entry.get("_fingerprint")
+            if stored_fp is not None and _fingerprints_match(stored_fp, _analysis_fingerprint(analysis_result)):
+                try:
+                    result = EnrichmentResult.from_dict(stored_entry)
+                    result.original_filename = filename
+                    log.info(f"{filename} analysis unchanged — reusing cached enrichment")
+                    return result
+                except (TypeError, KeyError):
+                    pass
+
     if not cfg.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
@@ -353,7 +402,7 @@ def enrich(
     if result.content_type is None and not analysis_result.fallback_only:
         result.content_type = analysis_result.content_type
 
-    cache.set(file_hash, result)
+    cache.set(file_hash, result, analysis_result)
     result.original_filename = filename
 
     level = "low_confidence" if result.low_confidence else f"{result.category}/{result.subcategory}"

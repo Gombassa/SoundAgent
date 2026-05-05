@@ -217,7 +217,7 @@ def test_build_prompt_includes_yamnet_when_not_fallback():
         fallback_only=False,
         content_type="sfx_or_field",
         yamnet_classes=["Gunshot", "Explosion"],
-        audioclip_matches=[{"prompt": "explosion", "score": 0.85}],
+        audioclip_matches=[{"tag": "explosion", "category": "sfx", "score": 0.85}],
     )
     prompt = _build_prompt("bang.wav", MOCK_META, analysis)
     assert "YAMNet" in prompt

@@ -4,6 +4,14 @@ from typing import Optional
 log = logging.getLogger("soundagent.audio_analysis.essentia")
 
 
+def is_available() -> bool:
+    try:
+        import essentia  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def analyse(filepath: str) -> dict:
     """
     Extract music descriptors from an audio file using Essentia's MusicExtractor.

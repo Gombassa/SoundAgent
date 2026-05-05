@@ -36,6 +36,7 @@ def analyse(
     content_type = "sfx_or_field"
     speech_score = 0.0
     audioclip_matches: list[dict] = []
+    audioclip_raw_scores: dict = {}
     whisper_language = None
     whisper_summary = None
     essentia_bpm = None
@@ -44,6 +45,14 @@ def analyse(
     essentia_loudness = None
     essentia_mood = None
     essentia_genre = None
+    librosa_bpm = None
+    librosa_bpm_confidence = None
+    librosa_key = None
+    librosa_loudness_rms = None
+    librosa_dynamic_complexity = None
+    librosa_spectral_centroid = None
+    librosa_zero_crossing_rate = None
+    librosa_source = None
     models_run: list[str] = []
     models_failed: list[str] = []
 
@@ -85,8 +94,11 @@ def analyse(
             waveform_44k, sr_44k = preprocessor.load_waveform_float32(wav_44k)
             if long_file:
                 waveform_44k = preprocessor.truncate_waveform(waveform_44k, sr_44k, truncate_s)
-            audioclip_matches = audioclip_analyzer.analyse(waveform_44k, sr_44k, audio_cfg)
-            models_run.append("audioclip")
+            if audioclip_analyzer.is_available(audio_cfg):
+                audioclip_matches, audioclip_raw_scores = audioclip_analyzer.analyse(
+                    waveform_44k, sr_44k, audio_cfg
+                )
+                models_run.append("audioclip")
         except Exception as exc:
             log.warning(f"AudioCLIP failed: {exc}")
             models_failed.append("audioclip")
@@ -108,21 +120,38 @@ def analyse(
         elif long_file:
             models_failed.append("whisper")  # skipped, not an error, but track it
 
-        # ── Essentia ─────────────────────────────────────────────────────────
-        run_essentia = not long_file and content_type == "music"
-        if run_essentia:
-            try:
-                ess = essentia_analyzer.analyse(filepath)
-                essentia_bpm = ess.get("bpm")
-                essentia_bpm_confidence = ess.get("bpm_confidence")
-                essentia_key = ess.get("key")
-                essentia_loudness = ess.get("loudness")
-                essentia_mood = ess.get("mood")
-                essentia_genre = ess.get("genre")
-                models_run.append("essentia")
-            except Exception as exc:
-                log.warning(f"Essentia failed: {exc}")
-                models_failed.append("essentia")
+        # ── Essentia / librosa ────────────────────────────────────────────────
+        run_music = not long_file and content_type == "music"
+        if run_music:
+            if essentia_analyzer.is_available():
+                try:
+                    ess = essentia_analyzer.analyse(filepath)
+                    essentia_bpm = ess.get("bpm")
+                    essentia_bpm_confidence = ess.get("bpm_confidence")
+                    essentia_key = ess.get("key")
+                    essentia_loudness = ess.get("loudness")
+                    essentia_mood = ess.get("mood")
+                    essentia_genre = ess.get("genre")
+                    models_run.append("essentia")
+                except Exception as exc:
+                    log.warning(f"Essentia failed: {exc}")
+                    models_failed.append("essentia")
+            else:
+                # Windows fallback: librosa
+                from soundagent.audio_analysis import librosa_analyzer
+                lib = librosa_analyzer.analyse(filepath)
+                if lib is not None:
+                    librosa_bpm = lib.get("bpm")
+                    librosa_bpm_confidence = lib.get("bpm_confidence")
+                    librosa_key = lib.get("key")
+                    librosa_loudness_rms = lib.get("loudness_rms")
+                    librosa_dynamic_complexity = lib.get("dynamic_complexity")
+                    librosa_spectral_centroid = lib.get("spectral_centroid_mean")
+                    librosa_zero_crossing_rate = lib.get("zero_crossing_rate_mean")
+                    librosa_source = lib.get("source")
+                    models_run.append("librosa")
+                else:
+                    models_failed.append("librosa")
         elif long_file and content_type == "music":
             models_failed.append("essentia")  # skipped due to length
 
@@ -139,6 +168,7 @@ def analyse(
         content_type=content_type,
         speech_score=speech_score,
         audioclip_matches=audioclip_matches,
+        audioclip_raw_scores=audioclip_raw_scores,
         whisper_language=whisper_language,
         whisper_summary=whisper_summary,
         essentia_bpm=essentia_bpm,
@@ -147,6 +177,14 @@ def analyse(
         essentia_loudness=essentia_loudness,
         essentia_mood=essentia_mood,
         essentia_genre=essentia_genre,
+        librosa_bpm=librosa_bpm,
+        librosa_bpm_confidence=librosa_bpm_confidence,
+        librosa_key=librosa_key,
+        librosa_loudness_rms=librosa_loudness_rms,
+        librosa_dynamic_complexity=librosa_dynamic_complexity,
+        librosa_spectral_centroid=librosa_spectral_centroid,
+        librosa_zero_crossing_rate=librosa_zero_crossing_rate,
+        librosa_source=librosa_source,
         models_run=models_run,
         models_failed=models_failed,
         analysis_duration_s=round(time.monotonic() - start, 2),

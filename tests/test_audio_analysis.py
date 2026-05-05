@@ -86,6 +86,8 @@ def test_pipeline_all_models_fail():
         mock_prep.truncate_waveform.return_value = dummy_waveform
 
         mock_yamnet.analyse.side_effect = RuntimeError("TF not installed")
+        # is_available returns True so analyse() is called; it raises to test models_failed
+        mock_audioclip.is_available.return_value = True
         mock_audioclip.analyse.side_effect = RuntimeError("torch not installed")
 
         result = analyse("/file.wav", "hash2", {"enabled": True}, duration_s=5.0)
@@ -149,7 +151,8 @@ def test_whisper_runs_only_on_speech():
         mock_yamnet.analyse.return_value = {
             "classes": ["Music"], "embedding": [], "content_type": "music", "speech_score": 0.1,
         }
-        mock_audioclip.analyse.return_value = []
+        mock_audioclip.is_available.return_value = True
+        mock_audioclip.analyse.return_value = ([], {})
         mock_whisper.analyse.return_value = {"language": "en", "summary": "test"}
 
         result = analyse("/file.wav", "h", {"enabled": True}, duration_s=5.0)
@@ -178,7 +181,8 @@ def test_essentia_runs_only_on_music():
         mock_yamnet.analyse.return_value = {
             "classes": ["Speech"], "embedding": [], "content_type": "speech", "speech_score": 0.8,
         }
-        mock_audioclip.analyse.return_value = []
+        mock_audioclip.is_available.return_value = True
+        mock_audioclip.analyse.return_value = ([], {})
 
         result = analyse("/file.wav", "h", {"enabled": True}, duration_s=5.0)
 
@@ -186,19 +190,22 @@ def test_essentia_runs_only_on_music():
     mock_essentia.analyse.assert_not_called()
 
 
-# ── AudioCLIP: skips missing weights ─────────────────────────────────────────
+# ── AudioCLIP: returns empty when weights missing ─────────────────────────────
 
-def test_audioclip_skips_missing_weights():
+def test_audioclip_returns_empty_when_weights_missing():
     from soundagent.audio_analysis import audioclip_analyzer
-    audioclip_analyzer._WEIGHTS_CHECKED = False
-    audioclip_analyzer._WEIGHTS_AVAILABLE = False
 
-    with patch("pathlib.Path.exists", return_value=False):
-        with pytest.raises(RuntimeError, match="weights not available"):
-            audioclip_analyzer.analyse(
-                np.zeros(44100, dtype=np.float32), 44100,
-                {"audioclip_weights_path": "/nonexistent/AudioCLIP.pt"},
-            )
+    # Reset the singleton so a fresh tagger is created with the test config
+    audioclip_analyzer._TAGGER = None
+
+    cfg = {"audioclip_weights_path": "/nonexistent/AudioCLIP.pt"}
+    tags, raw_scores = audioclip_analyzer.analyse(np.zeros(44100, dtype=np.float32), 44100, cfg)
+
+    assert tags == []
+    assert raw_scores == {}
+
+    # Cleanup singleton for subsequent tests
+    audioclip_analyzer._TAGGER = None
 
 
 # ── Long file: slow models skipped ───────────────────────────────────────────
@@ -221,7 +228,8 @@ def test_long_file_skips_whisper_and_essentia():
         mock_yamnet.analyse.return_value = {
             "classes": ["Music"], "embedding": [], "content_type": "music", "speech_score": 0.1,
         }
-        mock_audioclip.analyse.return_value = []
+        mock_audioclip.is_available.return_value = True
+        mock_audioclip.analyse.return_value = ([], {})
 
         # duration_s=200 exceeds default max_analysis_duration_s=120 → long_file=True
         result = analyse("/file.wav", "h", {"enabled": True}, duration_s=200.0)

@@ -22,3 +22,9 @@ models/**
 *.pth
 *.onnx
 *.bin
+
+# External binaries
+tools/
+
+# AudioCLIP source install (cloned locally, not committed)
+AudioCLIP/

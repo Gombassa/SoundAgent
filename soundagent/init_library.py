@@ -9,6 +9,7 @@ SUBDIRS = [
     "_inbox",
     "_staging",
     "_errors",
+    "_duplicates",
     "unclassified",
     "archive",
     "field/nature",

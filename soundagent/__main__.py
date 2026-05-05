@@ -22,6 +22,12 @@ def main() -> None:
     webdav_sub.add_parser("status", help="Show WebDAV server status")
     webdav_sub.add_parser("_serve", help=argparse.SUPPRESS)   # internal — called by start
 
+    dup_cmd = sub.add_parser("duplicates", help="List held duplicate files")
+    dup_cmd.add_argument("--all", action="store_true", dest="show_all",
+                         help="Include resolved duplicates (default: unresolved only)")
+    dup_cmd.add_argument("--json", action="store_true", dest="as_json",
+                         help="Output raw JSON")
+
     query_cmd = sub.add_parser("query", help="Search the sound catalogue")
     query_cmd.add_argument("terms", nargs="*", metavar="TERM",
                            help="Full-text search terms (description / tags)")
@@ -68,6 +74,35 @@ def main() -> None:
             print("WebDAV server: running" if running else "WebDAV server: stopped")
         elif args.webdav_action == "_serve":
             webdav_server.serve(cfg)
+
+    elif args.command == "duplicates":
+        from soundagent.catalogue import open_catalogue
+        cat = open_catalogue(cfg.library_root)
+        resolved_filter = None if args.show_all else 0
+        rows = cat._con.execute(
+            "SELECT filename, match_type, similarity, matched_filename, "
+            "detected_at, resolved FROM duplicates"
+            + (" WHERE resolved = 0" if resolved_filter is not None else "")
+            + " ORDER BY detected_at DESC"
+        ).fetchall()
+        cat.close()
+
+        if args.as_json:
+            import json as _json
+            print(_json.dumps([dict(r) for r in rows], indent=2))
+        else:
+            if not rows:
+                label = "unresolved " if not args.show_all else ""
+                print(f"No {label}duplicates.")
+            else:
+                label = "" if args.show_all else "unresolved "
+                print(f"{len(rows)} {label}duplicate(s):\n")
+                for r in rows:
+                    sim = f"  sim={r['similarity']:.2f}" if r["match_type"] == "fingerprint_match" else ""
+                    resolved = "  [resolved]" if r["resolved"] else ""
+                    print(f"  {r['filename']}")
+                    print(f"    type={r['match_type']}{sim}  matches={r['matched_filename']}"
+                          f"  {r['detected_at']}{resolved}")
 
     elif args.command == "query":
         from soundagent.catalogue import open_catalogue

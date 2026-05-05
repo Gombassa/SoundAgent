@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SoundAgent is a tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them via the Claude API, embeds standardised metadata, routes them into a structured library, and delivers them to Basehead Ultra for search and spotting.
 
-**Status:** P1–P9 complete and committed. Hybrid UCS+slug file rename feature added post-P9.
+**Status:** P1–P9 complete and committed. Post-P9 additions: hybrid UCS+slug file rename, duplicate detection (fpcalc/Chromaprint), librosa Windows music analysis fallback, token-reduction optimisations.
 
 ## Commands
 
@@ -43,17 +43,18 @@ Every tick runs this sequence in order. Each step is independent and can fail gr
 ```
 TICK START        → Cowork fires agent process
 1  HEALTH         → Check each source adapter; skip unavailable, log warning
-2  SCAN           → All active adapters deliver files to /_inbox/
-3  DEDUP          → SHA-256 hash → check SQLite → skip known files
-4  VALIDATE       → Extension/format allowlist → reject to /_errors/
+2  SCAN           → All active adapters deliver files to /_inbox/ (recursive rglob)
+3  DEDUP          → SHA-256 hash → check SQLite → exact duplicates → _duplicates/
+4  VALIDATE       → Extension/format allowlist (ingest.ALLOWED_EXTENSIONS) → reject to /_errors/
 5  STAGE          → Atomic copy to /_staging/ + ffprobe technical metadata
-6  AUDIO ANALYSIS → YAMNet + AudioCLIP always; Whisper if speech; Essentia if music
+5a FINGERPRINT    → fpcalc Chromaprint → compare DB → near-duplicates → _duplicates/
+6  AUDIO ANALYSIS → YAMNet + AudioCLIP always; Whisper if speech; Essentia/librosa if music
 7  ENRICH         → Claude API synthesises analysis results + suggested_filename
 7a RENAME         → renamer.py: UCS+slug filename; original preserved in iXML + catalogue
 8  EMBED          → Write iXML/BWF (WAV) · ID3 (MP3) · XMP sidecar; ORIGFILENAME in iXML
 9  ROUTE          → Rules engine: enriched metadata → target library path
 10 DELIVER        → Atomic move → Basehead import folder, fully tagged
-11 CATALOGUE      → SQLite upsert + FTS5 index update
+11 CATALOGUE      → SQLite upsert + FTS5 index update + fingerprint stored
 12 REPORT         → Tick summary → Cowork log + summary.json
 TICK END          → Exit 0 (clean) or exit 1 (partial failure)
 ```
@@ -69,14 +70,15 @@ If all audio analysis models fail or `audio_analysis.enabled: false` → step 6 
 | `yamnet_analyzer.py` | YAMNet (TF Hub) — sound event detection, content-type routing |
 | `whisper_analyzer.py` | Whisper — transcription + language detection (speech files only) |
 | `audioclip_analyzer.py` | AudioCLIP — zero-shot semantic tagging against text prompts |
-| `essentia_analyzer.py` | Essentia MusicExtractor — BPM, key, mood, genre (music files only) |
+| `essentia_analyzer.py` | Essentia MusicExtractor — BPM, key, mood, genre (music files only; Linux/macOS) |
+| `librosa_analyzer.py` | librosa music analysis — Windows fallback when Essentia is unavailable |
 | `pipeline.py` | Orchestrator: runs all models, catches failures, returns AnalysisResult |
 
 All ML imports (`tensorflow`, `whisper`, `torch`, `AudioCLIP`, `essentia`) are **inside function bodies** — missing libraries log a warning and the model is skipped; they never crash the agent.
 
-Content-type routing from YAMNet determines which specialist models run: `"speech"` → Whisper; `"music"` → Essentia. AudioCLIP always runs (if weights available). Files longer than `max_analysis_duration_s` (default 120s): YAMNet/AudioCLIP run on first 60s; Whisper/Essentia skip.
+Content-type routing from YAMNet determines which specialist models run: `"speech"` → Whisper; `"music"` → Essentia (Linux/macOS) or librosa (Windows fallback). AudioCLIP always runs (if weights available). Files longer than `max_analysis_duration_s` (default 120s): YAMNet/AudioCLIP run on first 60s; Whisper/Essentia/librosa skip.
 
-AudioCLIP weights must be downloaded manually to `models/audioclip/AudioCLIP.pt` (see README.md). The `models/` directory is gitignored; `models/.gitkeep` keeps the directory in the repo.
+AudioCLIP weights live at `models/audioclip/AudioCLIP-Partial-Training.pt`. The `models/` directory is gitignored; `models/.gitkeep` keeps the directory in the repo. The AudioCLIP source is cloned to `AudioCLIP/` (also gitignored) and imported via a `.pth` file in the venv.
 
 ### File renamer (`soundagent/renamer.py`)
 
@@ -93,6 +95,15 @@ Examples: `WTHR_rain-woodland-wind-light_96k24b.wav`, `AMB_traffic-exterior-busy
 - Collision handling: appends `_2`, `_3` etc. before the extension.
 - Fallback: if `suggested_filename` is absent, sanitises the original stem + technical suffix and logs a warning. Never raises.
 
+### Duplicate detection (`soundagent/fingerprinter.py`, `soundagent/duplicate_handler.py`)
+
+Two-pass duplicate detection runs at steps 3 and 5a:
+
+- **Step 3 (exact):** SHA-256 hash checked against the catalogue. Exact matches quarantined immediately — no staging, no analysis.
+- **Step 5a (near-duplicate):** fpcalc (Chromaprint) generates an audio fingerprint after staging. `catalogue.find_fingerprint_match()` compares against all stored fingerprints using Hamming distance. Files above `fingerprint_similarity_threshold` (default 0.85) are quarantined.
+
+`duplicate_handler.quarantine()` moves the held file to `_duplicates/` and writes a JSON sidecar (`{filename}.duplicate.json`) with match metadata. `catalogue.log_duplicate()` records the event in the `duplicates` table. If fpcalc is not found, step 5a is skipped with a warning and all staged files proceed normally.
+
 ### Source adapters (all converge on `/_inbox/`)
 
 | Adapter | Technology | Use case |
@@ -102,7 +113,7 @@ Examples: `WTHR_rain-woodland-wind-light_96k24b.wav`, `AMB_traffic-exterior-busy
 | `rclone` | rclone sync or mount | 70+ cloud providers (S3, GDrive, OneDrive, etc.) |
 | `webdav` | wsgidav background service | Mobile: iOS Files app, Android, field recorder apps |
 
-The adapter base class provides a common interface; the agent is source-agnostic once files land in inbox.
+The adapter base class provides a common interface; the agent is source-agnostic once files land in inbox. The local adapter scans recursively (`rglob`) and skips dotfiles. Extension filtering happens at step 4 (VALIDATE) via `ingest.ALLOWED_EXTENSIONS`.
 
 ### Folder hierarchy
 
@@ -110,6 +121,7 @@ The adapter base class provides a common interface; the agent is source-agnostic
 /SoundLibrary/
 ├─ _inbox/          ← all adapters deliver here
 ├─ _staging/        ← atomic copy during processing
+├─ _duplicates/     ← exact-hash and near-duplicate files held here with JSON sidecar
 ├─ field/nature/  sfx/impacts/  music/loops/  broadcast/idents/  voice/dialogue/  (etc.)
 ├─ unclassified/    ← low-confidence enrichment fallback
 ├─ _errors/         ← format/hash failures, quarantined with source annotation
@@ -121,23 +133,33 @@ The adapter base class provides a common interface; the agent is source-agnostic
 
 ### Configuration
 
-Two-layer config: YAML file (sources, paths, intervals) overridden by environment variables (API keys, adapter flags). The YAML `sources` block is a named list of adapter entries; each has `type: local|network|rclone|webdav` plus type-specific fields.
+Two-layer config: YAML file (sources, paths, intervals) overridden by environment variables (API keys, adapter flags). `ANTHROPIC_API_KEY` is loaded from environment or a `.env` file in the project root via `python-dotenv` (called at import time in `config.py`). Never put it in `config.yaml`. The YAML `sources` block is a named list of adapter entries; each has `type: local|network|rclone|webdav` plus type-specific fields.
 
 Key `audio_analysis` config block:
 
 ```yaml
 audio_analysis:
   enabled: true
-  audioclip_weights_path: models/audioclip/AudioCLIP.pt
+  audioclip_weights_path: models/audioclip/AudioCLIP-Partial-Training.pt
   whisper_model_size: base          # tiny | base | small | medium | large
   yamnet_cache_dir: .cache/yamnet
-  yamnet_top_n: 10
+  yamnet_top_n: 5                   # top YAMNet classes sent to Claude (default 5)
   yamnet_min_score: 0.05
   audioclip_min_score: 0.2
+  audioclip_top_n: 5                # max AudioCLIP matches sent to Claude (default 5)
   speech_threshold: 0.2             # YAMNet speech score to trigger Whisper
-  music_threshold: 0.3              # YAMNet music score to trigger Essentia
+  music_threshold: 0.3              # YAMNet music score to trigger Essentia/librosa
   max_analysis_duration_s: 120
   run_on_existing: false            # re-analyse catalogued files lacking analysis data
+```
+
+`duplicate_detection` config block:
+
+```yaml
+duplicate_detection:
+  enabled: true
+  fpcalc_path: tools/fpcalc.exe          # path to fpcalc binary; "fpcalc" if on PATH
+  fingerprint_similarity_threshold: 0.85  # 0.0–1.0; lower = more aggressive matching
 ```
 
 ### Claude enrichment (Phase 3 — updated)
@@ -147,7 +169,7 @@ audio_analysis:
 - New output schema: `category`, `subcategory`, `description`, `tags` (max 12), `mood`, `energy`, `usage_suggestions` (1–3 contexts), `bpm`, `musical_key`, `language`, `enrichment_confidence`, `notes`, `suggested_filename`
 - Expanded categories: `field | sfx | music | broadcast | voice | ambience`
 - Confidence scoring: analysis ran + clear detections → 0.75–0.95; fallback only + poor filename → 0.1–0.35
-- Enrichment cache: keyed on SHA-256; `run_on_existing=True` re-enriches files lacking analysis data
+- Enrichment cache: keyed on SHA-256; `run_on_existing=True` re-enriches files lacking analysis data. Analysis-unchanged shortcut: when `run_on_existing=True`, if the stored analysis fingerprint (`models_run` + top YAMNet class) matches the current run, the cached `EnrichmentResult` is returned without a Claude API call.
 
 ### Metadata embedding (Phase 4)
 
@@ -171,15 +193,15 @@ Filters: `q` (FTS), `category`, `content_type`, `source`, `min_duration`, `max_d
 
 ### SQLite catalogue (Phase 6 — updated)
 
-`soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`. FTS5 virtual table `fts_search` indexes `description + tags + usage_suggestions + notes`; kept in sync via triggers. `_migrate()` in `Catalogue._init_schema()` handles schema evolution via `ALTER TABLE` for new columns + FTS5 rebuild. `open_catalogue(library_root)` is the public entry point.
+`soundlibrary.db` in `library_root`. Primary key is SHA-256 hash. Tables: `files`, `enrichment`, `ingest_log`, `fingerprints`, `duplicates`. FTS5 virtual table `fts_search` indexes `description + tags + usage_suggestions + notes`; kept in sync via triggers. `_migrate()` in `Catalogue._init_schema()` handles schema evolution via `ALTER TABLE` for new columns + FTS5 rebuild. `open_catalogue(library_root)` is the public entry point.
 
 `files` table extra columns (post-P9): `original_filename` — the staged filename before UCS rename; preserved on first insert via `COALESCE` in the conflict clause.
 
-Enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, `whisper_summary`, `whisper_language`, `essentia_bpm`, `essentia_key`, `essentia_mood`, `essentia_genre`, `models_run`, `models_failed`, `analysis_duration_s`, `usage_suggestions`, `notes`.
+Enrichment columns (17): `content_type`, `yamnet_classes`, `audioclip_matches`, `whisper_summary`, `whisper_language`, `essentia_bpm`, `essentia_key`, `essentia_mood`, `essentia_genre`, `models_run`, `models_failed`, `analysis_duration_s`, `usage_suggestions`, `notes`, `librosa_bpm`, `librosa_key`, `librosa_dynamic_complexity`.
 
 ## Key dependencies
 
-**Core Python packages:** `anthropic`, `pyyaml`, `watchdog`, `ffmpeg-python`, `mutagen`, `wsgidav`, `aiofiles`, `tenacity`, `fastapi`, `uvicorn`
+**Core Python packages:** `anthropic`, `python-dotenv`, `pyyaml`, `watchdog`, `ffmpeg-python`, `mutagen`, `wsgidav`, `aiofiles`, `tenacity`, `fastapi`, `uvicorn`
 
 **Audio analysis (optional — graceful skip if missing):**
 - `tensorflow>=2.13`, `tensorflow-hub>=0.14` — YAMNet
@@ -187,10 +209,12 @@ Enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, 
 - `torch>=2.0`, `torchaudio>=2.0` — AudioCLIP inference
 - `AudioCLIP` — source install required (see README.md)
 - `essentia` — music analysis (Linux/macOS; skip gracefully on Windows)
+- `librosa>=0.10.0` — music analysis (Windows fallback for Essentia; pure Python)
 - `soundfile>=0.12`, `scipy>=1.11` — WAV loading
 
-**External tools (must be on PATH):**
+**External tools (must be on PATH or configured):**
 - `ffprobe` (FFmpeg) — audio technical metadata extraction and audio conversion for ML models
+- `fpcalc` (Chromaprint) — audio fingerprinting for near-duplicate detection; download from https://acoustid.org/chromaprint. Place at `tools/fpcalc.exe` (Windows) or set `fpcalc_path` in config. Optional — fingerprint step skips gracefully if not found.
 - `rclone` — cloud sync/mount (required only if rclone adapter is configured)
 - `WinFsp` — FUSE layer for rclone mount mode on Windows
 - `bwfmetaedit` — BWF iXML write and validation
@@ -198,23 +222,28 @@ Enrichment columns (14): `content_type`, `yamnet_classes`, `audioclip_matches`, 
 **Front-end:** Basehead Ultra (external application); agent delivers files to Basehead's configured import/watch folder.
 
 **Model weights (not in repo):**
-- AudioCLIP: `models/audioclip/AudioCLIP.pt` — manual download (~800MB, see README.md)
+- AudioCLIP: `models/audioclip/AudioCLIP-Partial-Training.pt` (~512MB, already present)
 - YAMNet: auto-downloads to `.cache/yamnet/` on first run (~25MB)
 - Whisper base: auto-downloads on first run (~145MB)
 
 ## Important constraints
 
 - All ML library imports (`tensorflow`, `whisper`, `torch`, `AudioCLIP`, `essentia`) must be inside function bodies — never at module level. Missing libraries log once and the model skips cleanly.
+- `librosa` and `numpy` imports in `librosa_analyzer.py` are also inside the function body — same rule applies.
 - Rclone mount mode requires WinFsp on Windows — document this dependency prominently for users.
 - WebDAV server lifecycle must be tied to the agent process (clean start/stop with tick).
 - Network/cloud adapters must fail gracefully (skip + retry queue) — never block the tick.
 - iXML spec has edge cases with non-ASCII characters; test with multilingual filenames early.
 - Basehead's iXML import field mapping is undocumented — requires empirical validation against a live Basehead instance.
 - Model weights must never be committed: `models/**` is gitignored; `models/.gitkeep` keeps the directory.
-- essentia is Linux/macOS only — Windows users get graceful skip, not an error.
+- essentia is Linux/macOS only — Windows users get graceful skip via `essentia_analyzer.is_available()`, then librosa runs instead.
 
 ## Gotchas
 
 - **`New-Item -ItemType Directory` on a dotfile path creates a directory, not a file.** Running `New-Item -ItemType Directory -Path "models\.gitkeep"` silently creates a *directory* named `.gitkeep`. Subsequent attempts to write a file at that path get "Access is denied". Fix: `Remove-Item -Recurse -Force` the directory first, then `Set-Content` to create the file.
 - **Starlette 1.0.0 changed `TemplateResponse` — `request` is now the first positional arg, not inside the context dict.** Call as `templates.TemplateResponse(request, "name.html", {"key": val})`. The old form `templates.TemplateResponse("name.html", {"request": request, ...})` passes the context dict as `name`, causing a Jinja2 `TypeError` on Python 3.14.
 - **`unittest.mock.patch` requires the target to be a module-level attribute.** Patching `module.attr` raises `AttributeError` if `attr` was imported inside a function body. For `audio_analysis/pipeline.py`: sub-module imports (`preprocessor`, `yamnet_analyzer`, etc.) are at module level so they can be patched in tests; ML library imports (`tensorflow`, `torch`, `whisper`, `essentia`) stay inside function bodies to avoid `ImportError` when libraries aren't installed.
+- **Windows console Unicode (cp1252): non-ASCII characters in log messages cause `UnicodeEncodeError` on narrow Windows consoles.** The `→` character (U+2192) used in dry-run log messages is a known example. Fixed via `_SafeStreamHandler` in `logging_setup.py` (falls back to `backslashreplace` encoding) and `encoding="utf-8"` on `RotatingFileHandler`. Do not use non-ASCII characters in new log messages without testing on Windows first.
+- **`ANTHROPIC_API_KEY` must not be in `config.yaml`.** Load it via environment variable or a `.env` file in the project root (`python-dotenv` calls `load_dotenv()` at import time in `config.py`). `.env` is gitignored. Putting the key in `config.yaml` risks accidental commit.
+- **`fpcalc_path` is relative to the working directory, not the project root.** `tools/fpcalc.exe` resolves correctly when the agent is run from the project root (`python -m soundagent tick`). If invoked from another directory, use an absolute path in `config.yaml`.
+- **librosa loads the full audio file into memory at analysis time.** For files under 60 s this is fine. `librosa_analyzer.py` caps analysis at 60 s for longer files by passing `duration=60` to `librosa.load()`. This is still in-memory — do not run librosa on extremely large files without checking available RAM.

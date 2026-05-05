@@ -26,6 +26,10 @@ echo   Then download weights (~800 MB) from the AudioCLIP releases page and plac
 echo   models\audioclip\AudioCLIP.pt
 echo.
 
+echo Installing librosa (Windows music analysis)...
+pip install "librosa>=0.10.0"
+echo.
+
 echo NOTE: Essentia is Linux/macOS only via pip.
 echo   On Windows, use the essentia-tensorflow wheel from:
 echo   https://github.com/MTG/essentia/releases

@@ -177,7 +177,7 @@
                 <div class="bg-gray-100 rounded-full h-1.5 w-20 overflow-hidden">
                   <div class="bg-indigo-400 h-full rounded-full" style="width: {{ (m.score * 100)|round|int }}%"></div>
                 </div>
-                <span class="text-gray-600">{{ m.prompt }}</span>
+                <span class="text-gray-600">{{ m.tag }}</span>{% if m.category %}<span class="text-gray-400 text-xs ml-1">[{{ m.category }}]</span>{% endif %}
                 <span class="text-gray-400 tabular-nums">{{ "%.0f"|format(m.score * 100) }}%</span>
               </div>
               {% endfor %}
