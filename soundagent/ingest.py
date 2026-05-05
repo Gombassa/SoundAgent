@@ -10,9 +10,28 @@ ALLOWED_EXTENSIONS = frozenset({
     ".ogg", ".opus",
 })
 
+# DAW-generated sidecar and session files — silently discarded, never treated as errors.
+SIDECAR_EXTENSIONS = frozenset({
+    # Peak / waveform display cache
+    ".pkf",   # Adobe Audition
+    ".sfk",   # Sony Sound Forge / Wavelab
+    ".wfm",   # Avid Pro Tools waveform cache
+    # DAW session / project files
+    ".sesx",  # Adobe Audition session
+    ".aup",   # Audacity project (XML)
+    ".aup3",  # Audacity project (SQLite)
+    ".ptx",   # Avid Pro Tools session (v8+)
+    ".ptf",   # Avid Pro Tools session (v5–7)
+    ".pts",   # Avid Pro Tools session settings
+})
+
 
 def is_allowed(path: Path) -> bool:
     return path.suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def is_sidecar(path: Path) -> bool:
+    return path.suffix.lower() in SIDECAR_EXTENSIONS
 
 
 def stage_file(src: Path, staging_dir: Path, hash_fragment: str = "") -> Path:

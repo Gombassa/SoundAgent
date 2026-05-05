@@ -220,6 +220,23 @@ Enrichment will run on filename and ffprobe metadata only.
 
 ---
 
+## Sidecar and Session Files
+
+The following DAW-generated file types are silently discarded during ingestion — they are never treated as errors and never appear in `_errors/`:
+
+| Extension | App | Type |
+|---|---|---|
+| `.pkf` | Adobe Audition | Peak/waveform display cache |
+| `.sfk` | Sony Sound Forge / Wavelab | Peak/waveform display cache |
+| `.wfm` | Avid Pro Tools | Waveform cache |
+| `.sesx` | Adobe Audition | Session file |
+| `.aup` / `.aup3` | Audacity | Project file |
+| `.ptx` / `.ptf` / `.pts` | Avid Pro Tools | Session/settings file |
+
+Any other non-audio extension is rejected to `_errors/`. Supported audio formats are: `.wav`, `.bwf`, `.aiff`, `.aif`, `.flac`, `.mp3`, `.aac`, `.m4a`, `.ogg`, `.opus`.
+
+---
+
 ## Duplicate Detection
 
 SoundAgent uses two-pass deduplication:

@@ -14,7 +14,7 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
     from soundagent.adapters import get_adapter
     from soundagent import ffprobe
     from soundagent.dedup import sha256
-    from soundagent.ingest import is_allowed, stage_file
+    from soundagent.ingest import is_allowed, is_sidecar, stage_file
     from soundagent.ingest_log import IngestLog
     from soundagent.enrichment import EnrichmentCache, enrich
     from soundagent.catalogue import open_catalogue
@@ -74,6 +74,19 @@ def run_tick(cfg: Config, dry_run: bool = False) -> int:
             seen_paths.add(f)
             unique_raw.append((f, adapter_name))
     raw_files = unique_raw
+
+    # Discard DAW sidecar files (peak caches, session files) before dedup.
+    # Inbox copies are deleted; files that are already in inbox (same-dir source) are skipped in place.
+    inbox_dir = cfg.library_root / "_inbox"
+    filtered_raw: list[tuple[Path, str]] = []
+    for f, adapter_name in raw_files:
+        if is_sidecar(f):
+            if f.exists() and f.resolve().parent == inbox_dir.resolve():
+                f.unlink()
+            log.debug(f"Discarded sidecar: {f.name}")
+        else:
+            filtered_raw.append((f, adapter_name))
+    raw_files = filtered_raw
 
     seen_hashes: dict[str, str] = {}
     deduped: list[tuple[Path, str, str]] = []
