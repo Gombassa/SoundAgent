@@ -20,6 +20,7 @@ enrichment:
   provider: ollama
   ollama_model: mistral
   ollama_url: http://localhost:11434
+  ollama_timeout: 300
 
 duplicate_detection:
   enabled: true

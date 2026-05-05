@@ -21,6 +21,7 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
+    before_sleep_log,
 )
 
 from soundagent.config import Config
@@ -303,7 +304,18 @@ def _call_claude(client: anthropic.Anthropic, prompt: str) -> str:
     return response.content[0].text
 
 
-def _call_ollama(ollama_url: str, model: str, prompt: str) -> str:
+@retry(
+    retry=retry_if_exception_type((
+        requests.Timeout,
+        requests.ConnectionError,
+        requests.HTTPError,
+    )),
+    wait=wait_exponential(multiplier=2, min=4, max=60),
+    stop=stop_after_attempt(3),
+    reraise=True,
+    before_sleep=before_sleep_log(log, logging.WARNING),
+)
+def _call_ollama(ollama_url: str, model: str, prompt: str, timeout: int) -> str:
     url = f"{ollama_url.rstrip('/')}/api/chat"
     payload = {
         "model": model,
@@ -313,7 +325,7 @@ def _call_ollama(ollama_url: str, model: str, prompt: str) -> str:
         ],
         "stream": False,
     }
-    resp = requests.post(url, json=payload, timeout=120)
+    resp = requests.post(url, json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json()["message"]["content"]
 
@@ -325,16 +337,17 @@ def _call_provider(prompt: str, cfg) -> str:
     if provider == "ollama":
         ollama_url = enrichment_cfg.get("ollama_url", "http://localhost:11434")
         model = enrichment_cfg.get("ollama_model", "mistral")
+        timeout = int(enrichment_cfg.get("ollama_timeout", 300))
         try:
-            return _call_ollama(ollama_url, model, prompt)
-        except (requests.ConnectionError, requests.Timeout) as exc:
-            log.warning(f"Ollama unreachable at {ollama_url}: {exc}")
+            return _call_ollama(ollama_url, model, prompt, timeout)
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
+            log.warning(f"Ollama failed after all retries ({ollama_url}): {exc}")
             if cfg.anthropic_api_key:
                 log.info("Falling back to Claude API")
                 client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
                 return _call_claude(client, prompt)
             raise RuntimeError(
-                "Ollama unreachable and no ANTHROPIC_API_KEY configured"
+                "Ollama failed after all retries and no ANTHROPIC_API_KEY configured — enrichment skipped"
             ) from exc
 
     if provider == "claude":
