@@ -1,9 +1,11 @@
 """
-Claude enrichment pipeline.
+Enrichment pipeline — sends ffprobe metadata + audio analysis results to an
+LLM provider (Ollama/Mistral by default, Claude API as alternative) and returns
+structured tags. Results are cached by SHA-256 hash.
 
-Sends ffprobe metadata + filename (+ audio analysis results when available)
-to Claude and returns structured tags. Results are cached by SHA-256 hash
-so unchanged files are never re-sent.
+Provider is selected via config.yaml:
+    enrichment:
+      provider: ollama   # ollama | claude
 """
 
 import json
@@ -13,6 +15,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 import anthropic
+import requests
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -274,7 +277,7 @@ class EnrichmentCache:
         self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 
 
-# ── API call with retry ───────────────────────────────────────────────────────
+# ── Provider implementations ──────────────────────────────────────────────────
 
 @retry(
     retry=retry_if_exception_type((
@@ -286,7 +289,7 @@ class EnrichmentCache:
     stop=stop_after_attempt(5),
     reraise=True,
 )
-def _call_api(client: anthropic.Anthropic, prompt: str) -> str:
+def _call_claude(client: anthropic.Anthropic, prompt: str) -> str:
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
@@ -298,6 +301,49 @@ def _call_api(client: anthropic.Anthropic, prompt: str) -> str:
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text
+
+
+def _call_ollama(ollama_url: str, model: str, prompt: str) -> str:
+    url = f"{ollama_url.rstrip('/')}/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+    resp = requests.post(url, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"]
+
+
+def _call_provider(prompt: str, cfg) -> str:
+    enrichment_cfg = cfg.enrichment
+    provider = enrichment_cfg.get("provider", "ollama")
+
+    if provider == "ollama":
+        ollama_url = enrichment_cfg.get("ollama_url", "http://localhost:11434")
+        model = enrichment_cfg.get("ollama_model", "mistral")
+        try:
+            return _call_ollama(ollama_url, model, prompt)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            log.warning(f"Ollama unreachable at {ollama_url}: {exc}")
+            if cfg.anthropic_api_key:
+                log.info("Falling back to Claude API")
+                client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+                return _call_claude(client, prompt)
+            raise RuntimeError(
+                "Ollama unreachable and no ANTHROPIC_API_KEY configured"
+            ) from exc
+
+    if provider == "claude":
+        if not cfg.anthropic_api_key:
+            raise RuntimeError("enrichment provider=claude but ANTHROPIC_API_KEY is not set")
+        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+        return _call_claude(client, prompt)
+
+    raise ValueError(f"Unknown enrichment provider: {provider!r}")
 
 
 # ── Response parsing + validation ─────────────────────────────────────────────
@@ -383,14 +429,9 @@ def enrich(
                 except (TypeError, KeyError):
                     pass
 
-    if not cfg.anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
     prompt = _build_prompt(filename, meta, analysis_result)
-
-    raw = _call_api(client, prompt)
-    log.debug(f"Raw API response for {filename}: {raw[:200]}")
+    raw = _call_provider(prompt, cfg)
+    log.debug(f"Raw response for {filename}: {raw[:200]}")
 
     try:
         data = _extract_json(raw)

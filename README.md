@@ -1,6 +1,6 @@
 # SoundAgent
 
-Tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them via the Claude API, embeds UCS-compatible metadata, and delivers fully tagged files to Basehead Ultra.
+Tick-based Python agent that ingests audio files from multiple sources, analyses them with local ML models, enriches them with an LLM, embeds UCS-compatible metadata, and delivers fully tagged files to Basehead Ultra.
 
 Each tick runs the full pipeline: scan → deduplicate → stage → analyse → enrich → rename → embed → route → deliver → catalogue.
 
@@ -16,7 +16,9 @@ Before installing, make sure the following are available on your system:
 | [FFmpeg](https://ffmpeg.org/download.html) | Audio conversion + metadata | Must be on PATH (`ffmpeg` and `ffprobe`) |
 | [fpcalc (Chromaprint)](https://acoustid.org/chromaprint) | Near-duplicate fingerprinting | Place at `tools/fpcalc.exe` or set path in config |
 | [bwfmetaedit](https://mediaarea.net/BWFMetaEdit) | BWF/iXML metadata writing (WAV) | Must be on PATH |
-| Anthropic API key | Claude enrichment | Set as `ANTHROPIC_API_KEY` env var |
+| [Ollama](https://ollama.com) | Local LLM enrichment (default) | Must be running before the pipeline starts |
+
+An Anthropic API key is **not required** unless you switch the enrichment provider to `claude`.
 
 ---
 
@@ -37,21 +39,71 @@ pip install -r requirements.txt
 scripts\install_audio_deps.bat   # Windows
 # See "Audio Analysis Models" section for manual install steps
 
-# 4. Set up config
+# 4. Pull the Mistral model into Ollama (one-time, ~4 GB)
+ollama pull mistral
+
+# 5. Set up config
 copy config.example.yaml config.yaml
 # Edit config.yaml — set library_root, sources, and audioclip_weights_path
 
-# 5. Set your API key (do not put this in config.yaml)
+# 6. Start Ollama (if not already running as a background service)
+ollama serve
+
+# 7. Create the library folder hierarchy
+python -m soundagent init
+
+# 8. Run a tick
+python -m soundagent tick
+```
+
+---
+
+## Enrichment Provider
+
+SoundAgent sends audio analysis results to an LLM to generate category, description, tags, and a structured filename. The default provider is **Ollama/Mistral** running locally. The Claude API is available as an alternative.
+
+### Default: Ollama (Mistral)
+
+Ollama must be running before you start a tick. On Windows, Ollama runs as a background service after install; check with:
+
+```bash
+ollama list          # shows downloaded models
+ollama serve         # start the server manually if needed
+```
+
+Pull the model once before first use:
+
+```bash
+ollama pull mistral
+```
+
+Config (this is already the default):
+
+```yaml
+enrichment:
+  provider: ollama
+  ollama_model: mistral
+  ollama_url: http://localhost:11434
+```
+
+If Ollama is unreachable when a tick runs, the pipeline logs a warning and falls back to the Claude API automatically — if `ANTHROPIC_API_KEY` is set. If neither is available, enrichment is skipped for that file and it is flagged as an error.
+
+### Alternative: Claude API
+
+Switch to the Claude API by changing `provider` in `config.yaml`:
+
+```yaml
+enrichment:
+  provider: claude
+```
+
+Then set your Anthropic API key as an environment variable (never put it in `config.yaml`):
+
+```bash
 # Windows:
 set ANTHROPIC_API_KEY=sk-ant-...
 # Or create a .env file in the project root:
 echo ANTHROPIC_API_KEY=sk-ant-... > .env
-
-# 6. Create the library folder hierarchy
-python -m soundagent init
-
-# 7. Run a tick
-python -m soundagent tick
 ```
 
 ---
@@ -63,6 +115,11 @@ Copy `config.example.yaml` to `config.yaml` and edit the following:
 ```yaml
 library_root: D:\SoundLibrary        # where files, DB, and logs live
 basehead_import_path: D:\SoundLibrary # Basehead watches this folder tree
+
+enrichment:
+  provider: ollama                    # ollama | claude
+  ollama_model: mistral
+  ollama_url: http://localhost:11434
 
 audio_analysis:
   audioclip_weights_path: C:/ML Models/audioclip/AudioCLIP-Partial-Training.pt
@@ -78,15 +135,13 @@ sources:
     enabled: true
 ```
 
-**Never put `ANTHROPIC_API_KEY` in `config.yaml`** — use the environment variable or a `.env` file.
-
 Windows paths in YAML should use forward slashes (`C:/ML Models/...`) or escaped backslashes (`C:\\ML Models\\...`).
 
 ---
 
 ## Audio Analysis Models
 
-SoundAgent uses four local ML models to analyse audio content before Claude enrichment. All models degrade gracefully — if a model is unavailable or fails, the pipeline continues with whatever data is available.
+SoundAgent uses four local ML models to analyse audio content before enrichment. All models degrade gracefully — if a model is unavailable or fails, the pipeline continues with whatever data is available.
 
 ### Model overview
 
@@ -107,7 +162,7 @@ SoundAgent uses four local ML models to analyse audio content before Claude enri
 | YAMNet | `%TEMP%\tfhub_modules` (TF Hub cache) | ~25 MB |
 | Whisper (base) | `%USERPROFILE%\.cache\whisper` | ~145 MB |
 
-**AudioCLIP weights must be downloaded manually** (~660 MB total). These are large binary files and are not stored inside the project directory — place them in a permanent location on your machine and point `config.yaml` at them.
+**AudioCLIP weights must be downloaded manually** (~660 MB total). Store them outside the project directory in a permanent location and point `config.yaml` at them.
 
 #### Download
 
@@ -161,7 +216,7 @@ audio_analysis:
   enabled: false
 ```
 
-Claude enrichment will run on filename and ffprobe metadata only.
+Enrichment will run on filename and ffprobe metadata only.
 
 ---
 

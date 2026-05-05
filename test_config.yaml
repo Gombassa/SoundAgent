@@ -16,6 +16,11 @@ audio_analysis:
   audioclip_threshold: 0.2
   audioclip_top_n: 5
 
+enrichment:
+  provider: ollama
+  ollama_model: mistral
+  ollama_url: http://localhost:11434
+
 duplicate_detection:
   enabled: true
   fpcalc_path: tools/fpcalc.exe
