@@ -224,7 +224,7 @@ def _get_tagger(audio_cfg: dict) -> "AudioCLIPTagger":
     if _TAGGER is None:
         weights_path = audio_cfg.get(
             "audioclip_weights_path",
-            "models/audioclip/AudioCLIP-Partial-Training.pt",
+            "C:/ML Models/audioclip/AudioCLIP-Partial-Training.pt",
         )
         vocab_path = audio_cfg.get("tag_vocabulary_path", "config/tag_vocabulary.yaml")
         _TAGGER = AudioCLIPTagger(weights_path, vocab_path, audio_cfg)

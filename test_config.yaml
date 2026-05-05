@@ -1,0 +1,28 @@
+library_root: D:\SoundLibrary
+basehead_import_path: D:\SoundLibrary
+log_level: DEBUG
+
+audio_analysis:
+  enabled: true
+  max_analysis_duration_s: 120
+  truncate_waveform_s: 60
+  speech_threshold: 0.4
+  music_threshold: 0.3
+  whisper_model: base
+  audioclip_weights_path: C:/ML Models/audioclip/AudioCLIP-Partial-Training.pt
+  tag_vocabulary_path: config/tag_vocabulary.yaml
+  audioclip_max_tags: 15
+  yamnet_top_n: 5
+  audioclip_threshold: 0.2
+  audioclip_top_n: 5
+
+duplicate_detection:
+  enabled: true
+  fpcalc_path: tools/fpcalc.exe
+  fingerprint_similarity_threshold: 0.85
+
+sources:
+  - name: test_inbox
+    type: local
+    path: D:\SoundAgent_TestInbox
+    enabled: true
