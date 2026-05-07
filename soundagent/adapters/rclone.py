@@ -20,6 +20,7 @@ class RcloneAdapter(BaseAdapter):
             r = subprocess.run(
                 ["rclone", "lsd", self._remote, "--max-depth", "0"],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 timeout=10,
             )
             return r.returncode == 0
@@ -38,7 +39,7 @@ class RcloneAdapter(BaseAdapter):
 
         log.info(f"[{self.name}] {' '.join(cmd)}")
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_RCLONE_TIMEOUT)
+            subprocess.run(cmd, check=True, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=_RCLONE_TIMEOUT)
         except FileNotFoundError:
             log.error(f"[{self.name}] rclone not found on PATH")
             return []

@@ -16,6 +16,7 @@ SIDECAR_EXTENSIONS = frozenset({
     ".pkf",   # Adobe Audition
     ".sfk",   # Sony Sound Forge / Wavelab
     ".wfm",   # Avid Pro Tools waveform cache
+    ".asd",   # Ableton Live waveform analysis cache
     # DAW session / project files
     ".sesx",  # Adobe Audition session
     ".aup",   # Audacity project (XML)

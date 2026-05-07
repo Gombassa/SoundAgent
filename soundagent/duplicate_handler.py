@@ -51,7 +51,10 @@ def quarantine(
                 dest = duplicates_dir / f"{stem}_{counter}{ext}"
                 counter += 1
 
-        shutil.move(str(file_path), dest)
+        tmp = dest.parent / f".{dest.name}.tmp"
+        shutil.copy2(str(file_path), tmp)
+        tmp.replace(dest)
+        file_path.unlink(missing_ok=True)
 
         sidecar = {
             "original_filename": file_path.name,

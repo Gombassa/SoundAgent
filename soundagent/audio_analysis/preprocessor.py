@@ -18,7 +18,7 @@ def to_wav(filepath: str, tmp_dir: str, sample_rate: int) -> Path:
         "-f", "wav",
         str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg conversion failed (exit {result.returncode}): "

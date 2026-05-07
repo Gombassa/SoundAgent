@@ -26,6 +26,7 @@ def is_available(fpcalc_path: str = "fpcalc") -> bool:
         subprocess.run(
             [_resolve(fpcalc_path), "-version"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             timeout=5,
             check=False,
         )
@@ -44,6 +45,7 @@ def generate(filepath: Path, fpcalc_path: str = "fpcalc") -> dict | None:
         result = subprocess.run(
             [_resolve(fpcalc_path), "-json", str(filepath)],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             timeout=120,
             check=False,

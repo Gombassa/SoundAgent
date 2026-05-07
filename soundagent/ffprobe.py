@@ -25,6 +25,7 @@ def extract(path: Path) -> AudioMetadata:
                 str(path),
             ],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             check=True,
         )

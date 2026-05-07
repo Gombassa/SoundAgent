@@ -110,12 +110,12 @@ def _bwfmetaedit_write(path: Path, ucs: UCSFields, original_filename: str | None
     try:
         subprocess.run(
             ["bwfmetaedit", f"--in-iXML={tmp}", str(path)],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, stdin=subprocess.DEVNULL, text=True,
         )
         # BEXT Description field (256 char limit per spec)
         subprocess.run(
             ["bwfmetaedit", f"--bext-Description={ucs.description[:256]}", str(path)],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, stdin=subprocess.DEVNULL, text=True,
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"bwfmetaedit failed: {e.stderr.strip()}")
