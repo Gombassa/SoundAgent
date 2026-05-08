@@ -18,6 +18,14 @@ soundlibrary.db
 models/**
 !models/.gitkeep
 .cache/
+
+# React UI
+ui/node_modules/
+ui/dist/
+
+# Runtime data and logs
+data/
+logs/
 *.pt
 *.pth
 *.onnx
